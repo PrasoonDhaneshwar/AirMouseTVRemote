@@ -56,7 +56,10 @@ import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.hilt.navigation.compose.hiltViewModel
-import com.prasoon.airmousetv.data.repository.DiscoveredTv
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.compose.LocalLifecycleOwner
+import androidx.lifecycle.repeatOnLifecycle
+import com.prasoon.airmousetv.data.model.DiscoveredTv
 import com.prasoon.airmousetv.presentation.RemoteViewModel
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -67,9 +70,14 @@ fun DiscoveryScreen(
     modifier: Modifier = Modifier
 ) {
     val uiState by viewModel.uiState.collectAsState()
-    // NEW: Lifecycle-aware discovery
-    LaunchedEffect(Unit) {
-        viewModel.startDiscovery()
+    // Lifecycle-aware discovery
+    val lifecycleOwner = LocalLifecycleOwner.current
+
+    // Starts discovery when STARTED, cancels when STOPPED
+    LaunchedEffect(lifecycleOwner) {
+        lifecycleOwner.repeatOnLifecycle(Lifecycle.State.STARTED) {
+            viewModel.startDiscovery()
+        }
     }
     DisposableEffect(Unit) {
         onDispose {

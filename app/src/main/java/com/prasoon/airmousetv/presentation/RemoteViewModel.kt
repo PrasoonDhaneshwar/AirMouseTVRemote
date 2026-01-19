@@ -2,7 +2,7 @@ package com.prasoon.airmousetv.presentation
 
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
-import com.prasoon.airmousetv.data.repository.DiscoveredTv
+import com.prasoon.airmousetv.data.model.DiscoveredTv
 import com.prasoon.airmousetv.data.repository.RemoteRepository
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.Job

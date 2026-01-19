@@ -12,7 +12,7 @@ import androidx.compose.material3.windowsizeclass.calculateWindowSizeClass
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
 import androidx.hilt.navigation.compose.hiltViewModel
-import com.prasoon.airmousetv.data.repository.DiscoveredTv
+import com.prasoon.airmousetv.data.model.DiscoveredTv
 import com.prasoon.airmousetv.presentation.RemoteViewModel
 import com.prasoon.airmousetv.ui.screens.DiscoveryScreen
 import com.prasoon.airmousetv.ui.theme.AirMouseTVRemoteTheme
