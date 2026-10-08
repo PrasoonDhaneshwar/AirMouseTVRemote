@@ -59,7 +59,10 @@ class NetworkMonitor @Inject constructor(
         return try {
             val network = connectivityManager.activeNetwork ?: return false
             val caps = connectivityManager.getNetworkCapabilities(network) ?: return false
-            caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)
+            // Any local connectivity is enough: the TV is on the LAN, internet isn't required
+            caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_NOT_RESTRICTED) ||
+                caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET) ||
+                caps.hasTransport(NetworkCapabilities.TRANSPORT_WIFI)
         } catch (e: Exception) {
             false
         }
@@ -69,7 +72,8 @@ class NetworkMonitor @Inject constructor(
         trySend(currentNetworkConnected())
 
         val request = NetworkRequest.Builder()
-            .addCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)
+            .addCapability(NetworkCapabilities.NET_CAPABILITY_NOT_RESTRICTED)
+            .addTransportType(NetworkCapabilities.TRANSPORT_WIFI)
             .build()
 
         val callback = object : ConnectivityManager.NetworkCallback() {

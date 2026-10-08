@@ -4,6 +4,7 @@ import android.content.Context
 import com.prasoon.airmousetv.data.repository.NetworkMonitor
 import com.prasoon.airmousetv.data.repository.NsdDiscoveryEngine
 import com.prasoon.airmousetv.data.repository.RemoteRepository
+import com.prasoon.airmousetv.data.repository.RemoteSessionManager
 import com.prasoon.airmousetv.data.repository.TvCacheManager
 import com.prasoon.airmousetv.data.repository.TvPortScanner
 import dagger.Module
@@ -52,15 +53,23 @@ object RepositoryModule {
 
     @Provides
     @Singleton
+    fun provideRemoteSessionManager(
+        @ApplicationContext context: Context
+    ): RemoteSessionManager = RemoteSessionManager(context)
+
+    @Provides
+    @Singleton
     fun provideRemoteRepository(
         discovery: NsdDiscoveryEngine,
         scanner: TvPortScanner,
         cache: TvCacheManager,
-        monitor: NetworkMonitor
+        monitor: NetworkMonitor,
+        session: RemoteSessionManager
     ): RemoteRepository = RemoteRepository(
         networkMonitor = monitor,
         nsdDiscoveryEngine = discovery,
         tvPortScanner = scanner,
-        tvCacheManager = cache
+        tvCacheManager = cache,
+        session = session
     )
 }

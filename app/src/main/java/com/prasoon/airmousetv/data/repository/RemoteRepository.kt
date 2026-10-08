@@ -1,7 +1,9 @@
 package com.prasoon.airmousetv.data.repository
 
 import android.util.Log
+import com.prasoon.airmousetv.data.api.KeyPayloadFactory
 import com.prasoon.airmousetv.data.model.DiscoveredTv
+import com.prasoon.airmousetv.data.model.TvKey
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -13,19 +15,28 @@ import javax.inject.Inject
 import javax.inject.Singleton
 
 private const val TAG = "RemoteRepository"
+
+/**
+ * Single entry point for the data layer: TV discovery (NSD, with an HTTP name lookup fallback)
+ * and key sending through the [RemoteSessionManager].
+ */
 @Singleton
 class RemoteRepository @Inject constructor(
     private val networkMonitor: NetworkMonitor,
     private val nsdDiscoveryEngine: NsdDiscoveryEngine,
     private val tvPortScanner: TvPortScanner,
-    private val tvCacheManager: TvCacheManager
+    private val tvCacheManager: TvCacheManager,
+    private val session: RemoteSessionManager
 ) : NsdDiscoveryListener {
 
+    /** Background scope for discovery work and TV name lookups. */
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
+    /** TVs found so far, de-duplicated by service name. */
     private val _discoveredTvs = MutableStateFlow<List<DiscoveredTv>>(emptyList())
     val discoveredTvs: StateFlow<List<DiscoveredTv>> = _discoveredTvs
 
+    /** The in-flight startDiscovery() launch; non-null/active means discovery is running. */
     private var discoveryJob: Job? = null
 
     init {
@@ -112,5 +123,11 @@ class RemoteRepository @Inject constructor(
             _discoveredTvs.value = filtered
             Log.d(TAG, "📊 Removed lost service, now ${filtered.size} TVs")
         }
+    }
+
+
+    /** Sends one key tap to the TV over the active remote session. */
+    suspend fun sendKey(key: TvKey) {
+        session.send(KeyPayloadFactory.keyPress(key))
     }
 }

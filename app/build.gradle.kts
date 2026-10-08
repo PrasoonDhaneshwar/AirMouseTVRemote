@@ -2,8 +2,9 @@ plugins {
     alias(libs.plugins.android.application)
     alias(libs.plugins.kotlin.android)
     alias(libs.plugins.kotlin.compose)
-    kotlin("kapt")
-    id("dagger.hilt.android.plugin")
+    alias(libs.plugins.kotlin.kapt)
+    alias(libs.plugins.hilt)
+    alias(libs.plugins.protobuf)
 }
 
 android {
@@ -43,38 +44,47 @@ android {
     }
 }
 
+protobuf {
+    protoc {
+        artifact = libs.protobuf.protoc.get().toString()
+    }
+
+    generateProtoTasks {
+        all().forEach { task ->
+            task.builtins {
+                create("java") {
+                    option("lite")
+                }
+            }
+        }
+    }
+}
+
 dependencies {
     implementation(libs.androidx.core.ktx)
     implementation(libs.androidx.lifecycle.runtime.ktx)
     implementation(libs.androidx.activity.compose)
+
+    // Compose
     implementation(platform(libs.androidx.compose.bom))
     implementation(libs.androidx.compose.ui)
     implementation(libs.androidx.compose.ui.graphics)
     implementation(libs.androidx.compose.ui.tooling.preview)
     implementation(libs.androidx.compose.material3)
-    implementation(libs.compose.material.icons.extended)
-    implementation(libs.androidx.material3)
+    implementation(libs.androidx.compose.material3.windowsizeclass)
+    implementation(libs.androidx.compose.material.icons.extended)
 
-
-    // Dependency Injection - Hilt
+    // Dependency injection - Hilt
     implementation(libs.hilt.android)
-    implementation(libs.androidx.compose.material3.window.size.class1)
-    implementation(libs.androidx.compose.ui.test)
-    implementation(libs.androidx.compose.animation.core)
+    implementation(libs.androidx.hilt.navigation.compose)
     kapt(libs.hilt.android.compiler)
 
-    // Navigation between screens
-    implementation(libs.androidx.navigation.compose)
-    implementation(libs.androidx.hilt.navigation.compose)
-
-    implementation("org.json:json:20251224")  // For parsing
-    implementation("io.coil-kt:coil-compose:2.7.0")
+    // Android TV remote protocol: protobuf messages, and BouncyCastle to generate the client certificate
+    implementation(libs.protobuf.javalite)
+    implementation(libs.bouncycastle.bcpkix)
 
     testImplementation(libs.junit)
     androidTestImplementation(libs.androidx.junit)
     androidTestImplementation(libs.androidx.espresso.core)
-    androidTestImplementation(platform(libs.androidx.compose.bom))
-    androidTestImplementation(libs.androidx.compose.ui.test.junit4)
     debugImplementation(libs.androidx.compose.ui.tooling)
-    debugImplementation(libs.androidx.compose.ui.test.manifest)
 }

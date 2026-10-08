@@ -96,10 +96,6 @@ class NsdDiscoveryEngine @Inject constructor(
         listeners.add(listener)
     }
 
-    fun unregisterListener(listener: NsdDiscoveryListener) {
-        listeners.remove(listener)
-    }
-
     private fun notifyDiscoveredTv(tv: DiscoveredTv) {
         listeners.forEach { it.onTvDiscovered(tv) }
         Log.d(TAG_NSD, "📡 TV discovered: ${tv.displayName}")
