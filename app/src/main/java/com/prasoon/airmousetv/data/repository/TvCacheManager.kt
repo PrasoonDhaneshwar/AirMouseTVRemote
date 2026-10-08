@@ -29,8 +29,6 @@ class TvCacheManager @Inject constructor(
         return if (port > 0) port else null
     }
 
-    fun hasWorkingPort(ip: String): Boolean = getCachedPort(ip) != null
-
     fun clearAll() {
         prefs.edit(commit = true) {
             clear()
