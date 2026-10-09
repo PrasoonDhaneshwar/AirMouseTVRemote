@@ -4,9 +4,11 @@ import android.content.Context
 import android.content.pm.ApplicationInfo
 import android.util.Log
 import com.prasoon.airmousetv.data.api.FrameCodec
+import com.prasoon.airmousetv.data.api.KeyPayloadFactory
 import com.prasoon.airmousetv.data.api.PairingPayloadFactory
 import com.prasoon.airmousetv.data.api.proto.RemoteMessageEncoder
 import com.prasoon.airmousetv.data.model.ConnectionState
+import com.prasoon.airmousetv.data.model.ImeField
 import com.prasoon.airmousetv.proto.polo.OuterMessage
 import com.prasoon.airmousetv.proto.remote.RemoteMessage
 import kotlinx.coroutines.CoroutineScope
@@ -15,6 +17,7 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
@@ -53,10 +56,20 @@ private const val TAG = "RemoteSession"
 private const val PAIRING_PORT = 6467
 /** Remote-control port on the TV; only accepts clients it has paired with. */
 private const val REMOTE_PORT = 6466
-/** Feature bitmask advertised in RemoteConfigure/RemoteSetActive, copied from other clients. */
-private const val REMOTE_FEATURES = 622
+/**
+ * Features we can use, as a bitmask: PING 1, KEY 2, IME 4, POWER 32, VOLUME 64, APP_LINK 512.
+ * The session activates only those the TV also offers (voice is deliberately left out).
+ */
+private const val SUPPORTED_FEATURES = 1 or 2 or 4 or 32 or 64 or 512
 /** How long to wait for an already-paired TV to activate the session before pairing instead. */
 private const val TRUSTED_CHECK_TIMEOUT_MS = 3000L
+/** TCP connect timeout; a TV on the same LAN answers (or refuses) well within this. */
+private const val CONNECT_TIMEOUT_MS = 4000
+
+/** The TV's address didn't accept a connection: it is off, still booting, or has a new IP. */
+class TvUnreachableException(host: String, cause: Throwable) : Exception(
+    "TV not reachable at $host. Make sure it is on and on the same Wi-Fi, and that a VPN isn't blocking local network access.", cause
+)
 /** Alias of the client key/certificate inside the PKCS12 file. */
 private const val CERT_ALIAS = "androidtv-remote"
 /** App-private file holding the client certificate; the TV pairs with this exact certificate. */
@@ -72,7 +85,7 @@ private val KEYSTORE_PASSWORD = "atv-remote".toCharArray()
  *   C Secret         -> S SecretAck          (paired; TV remembers our client cert)
  *
  * Then a second TLS connection on port 6466 carries the remote-control protocol:
- *   S RemoteConfigure -> C RemoteConfigure, S RemoteSetActive -> C RemoteSetActive(622),
+ *   S RemoteConfigure -> C RemoteConfigure, S RemoteSetActive -> C RemoteSetActive(features),
  *   then pings are answered and RemoteKeyInject messages are sent.
  */
 class RemoteSessionManager(private val context: Context) {
@@ -92,6 +105,14 @@ class RemoteSessionManager(private val context: Context) {
         MutableStateFlow<ConnectionState>(ConnectionState.Idle)
     /** Progress of the connection, observed by the ViewModel. */
     val connectionState: StateFlow<ConnectionState> = _connectionState
+
+    /** Backing flow for [imeField]. */
+    private val _imeField = MutableStateFlow<ImeField?>(null)
+    /** The text field focused on the TV, if it has reported one this session. */
+    val imeField: StateFlow<ImeField?> = _imeField
+
+    /** Features agreed with the TV in the current remote session. */
+    private var activeFeatures = SUPPORTED_FEATURES
 
     /** TV address, kept so the remote session can be opened right after pairing. */
     private var host: String? = null
@@ -123,10 +144,28 @@ class RemoteSessionManager(private val context: Context) {
         remoteConn = null
         phase = Phase.IDLE
         this.host = host
+        _imeField.value = null
         _connectionState.value = ConnectionState.Idle
 
         if (tryRemoteSession(host)) return
         startPairing(host, clientName)
+    }
+
+    /**
+     * Re-opens the remote session with a TV that has already paired with us. Unlike [connect]
+     * this never falls back to pairing; it returns false if the TV is unreachable or no longer
+     * trusts our certificate.
+     */
+    suspend fun reconnect(host: String): Boolean {
+        closeConn(pairingConn)
+        closeConn(remoteConn)
+        pairingConn = null
+        remoteConn = null
+        phase = Phase.IDLE
+        this.host = host
+        _imeField.value = null
+        _connectionState.value = ConnectionState.Idle
+        return tryRemoteSession(host)
     }
 
     /**
@@ -190,12 +229,14 @@ class RemoteSessionManager(private val context: Context) {
             socket.keepAlive = true
             socket.tcpNoDelay = true
             try {
-                socket.connect(InetSocketAddress(host, port), 10000)
+                socket.connect(InetSocketAddress(host, port), CONNECT_TIMEOUT_MS)
                 socket.soTimeout = 0
                 socket.startHandshake()
             } catch (e: Exception) {
                 runCatching { socket.close() }
-                throw e
+                throw if (e is java.net.SocketTimeoutException || e is java.net.ConnectException) {
+                    TvUnreachableException(host, e)
+                } else e
             }
 
             val session = socket.session
@@ -441,6 +482,7 @@ class RemoteSessionManager(private val context: Context) {
     /** Handles the remote-control handshake (configure, set-active), ping replies and TV notices. */
     private suspend fun handleRemoteFrame(bytes: ByteArray) {
         val conn = remoteConn ?: return
+        logFrame("Received", bytes)
         val message = try {
             RemoteMessage.parseFrom(bytes)
         } catch (e: Exception) {
@@ -452,18 +494,79 @@ class RemoteSessionManager(private val context: Context) {
             message.hasRemotePingRequest() ->
                 send(RemoteMessageEncoder.encodePingResponse(message.remotePingRequest.val1), conn)
             message.hasRemoteConfigure() -> {
-                Log.d(TAG, "RemoteConfigure from TV: ${message.remoteConfigure.deviceInfo.model}")
-                send(RemoteMessageEncoder.encodeConfigure(), conn)
+                val offered = message.remoteConfigure.code1
+                activeFeatures = offered and SUPPORTED_FEATURES
+                Log.d(TAG, "RemoteConfigure from TV: ${message.remoteConfigure.deviceInfo.model} offers $offered, using $activeFeatures")
+                send(RemoteMessageEncoder.encodeConfigure(activeFeatures), conn)
             }
             message.hasRemoteSetActive() -> {
                 Log.d(TAG, "RemoteSetActive from TV: ${message.remoteSetActive.active}")
-                send(RemoteMessageEncoder.encodeSetActive(REMOTE_FEATURES), conn)
+                send(RemoteMessageEncoder.encodeSetActive(activeFeatures), conn)
                 _connectionState.value = ConnectionState.Connected
+            }
+            message.hasRemoteImeKeyInject() -> message.remoteImeKeyInject.let {
+                // Sent when the foreground app changes (no field) and when a text field takes focus
+                Log.d(TAG, "ImeKeyInject: app=${it.appInfo.appPackage} hasField=${it.hasTextFieldStatus()}")
+                if (it.hasTextFieldStatus()) updateIme(it.textFieldStatus, focused = true)
+            }
+            message.hasRemoteImeShowRequest() -> message.remoteImeShowRequest.let {
+                // Also sent after every edit we make, with the field's full text, so it isn't a focus signal
+                Log.d(TAG, "ImeShowRequest: field=${it.remoteTextFieldStatus.counterField}")
+                updateIme(it.remoteTextFieldStatus, focused = false)
+            }
+            message.hasRemoteImeBatchEdit() -> message.remoteImeBatchEdit.let { edit ->
+                Log.d(TAG, "ImeBatchEdit from TV: ime=${edit.imeCounter} field=${edit.fieldCounter}")
+                // Observed: ime=1 when a text field is activated on the TV, ime=0 when it is closed
+                _imeField.update { old ->
+                    (old ?: ImeField()).copy(
+                        imeCounter = edit.imeCounter,
+                        showRequests = (old?.showRequests ?: 0) + if (edit.imeCounter > 0) 1 else 0
+                    )
+                }
             }
             message.hasRemoteStart() -> Log.d(TAG, "RemoteStart: ${message.remoteStart.started}")
             message.hasRemoteError() -> Log.w(TAG, "RemoteError from TV: ${message.remoteError}")
             else -> Log.d(TAG, "Unhandled RemoteMessage (${bytes.size} bytes)")
         }
+    }
+
+    /** Records the TV's report of its focused text field; [focused] counts it as a new field taking focus. */
+    private fun updateIme(
+        status: com.prasoon.airmousetv.proto.remote.RemoteTextFieldStatus,
+        focused: Boolean
+    ) {
+        _imeField.update { old ->
+            (old ?: ImeField()).copy(
+                label = status.label,
+                value = status.value,
+                showRequests = (old?.showRequests ?: 0) + if (focused) 1 else 0
+            )
+        }
+    }
+
+    /** True when the TV has an open text input session that accepts text edits. */
+    val hasTextSession: Boolean get() = _imeField.value?.acceptsText == true
+
+    /**
+     * Sends [text] through the TV's text input session, where it replaces the word at the cursor.
+     * Returns false, sending nothing, if the TV has no open text input session to take it.
+     */
+    suspend fun sendText(text: String): Boolean {
+        if (!hasTextSession) return false
+        Log.d(TAG, "sendText len=${text.length}")
+        send(KeyPayloadFactory.textEdit(text))
+        return true
+    }
+
+    /**
+     * Deletes the [count] characters before the cursor through the TV's text input session.
+     * Returns false, sending nothing, if the TV has no open text input session.
+     */
+    suspend fun deleteText(count: Int): Boolean {
+        if (!hasTextSession) return false
+        Log.d(TAG, "deleteText count=$count")
+        send(KeyPayloadFactory.textDelete(count))
+        return true
     }
 
     /** Big-endian bytes without the sign byte Java adds, which is what the secret's hash is computed over. */
@@ -497,6 +600,7 @@ class RemoteSessionManager(private val context: Context) {
         pairingConn = null
         remoteConn = null
         phase = Phase.IDLE
+        _imeField.value = null
         _connectionState.value = ConnectionState.Disconnected
     }
 }

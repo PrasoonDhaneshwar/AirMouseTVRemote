@@ -23,4 +23,8 @@ data class RemoteUiState(
     /** True once the TV is showing its code, so the screen swaps the spinner for the code field. */
     val awaitingCode: Boolean = false,
     val error: String? = null,
+    /** True while the app is re-establishing a dropped session; the remote stays on screen, disabled. */
+    val isReconnecting: Boolean = false,
+    /** The text field focused on the TV, or null if it has not reported one. */
+    val imeField: ImeField? = null,
 )

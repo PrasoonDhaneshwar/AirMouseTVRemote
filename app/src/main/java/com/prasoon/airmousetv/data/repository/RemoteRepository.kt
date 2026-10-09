@@ -1,20 +1,33 @@
 package com.prasoon.airmousetv.data.repository
 
+import android.os.SystemClock
 import android.util.Log
 import com.prasoon.airmousetv.data.api.KeyPayloadFactory
+import com.prasoon.airmousetv.data.api.TextKeyMapper
+import com.prasoon.airmousetv.proto.remote.RemoteKeyCode
 import com.prasoon.airmousetv.data.model.DiscoveredTv
+import com.prasoon.airmousetv.data.model.KeyAction
 import com.prasoon.airmousetv.data.model.TvKey
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import javax.inject.Inject
 import javax.inject.Singleton
 
 private const val TAG = "RemoteRepository"
+/**
+ * Minimum time between two edits to the TV's text field. Measured on the TV: the word being
+ * typed is only replaced reliably when the previous edit was more than about 350 ms earlier;
+ * edits closer together are applied unpredictably (the word is often appended instead).
+ */
+private const val EDIT_GAP_MS = 450L
 
 /**
  * Single entry point for the data layer: TV discovery (NSD, with an HTTP name lookup fallback)
@@ -105,13 +118,14 @@ class RemoteRepository @Inject constructor(
     // Your original updateDiscoveredList with service lost handling
     private fun updateDiscoveredList(updatedTv: DiscoveredTv) {
         val list = _discoveredTvs.value.toMutableList()
-        val idx = list.indexOfFirst { it.name == updatedTv.name }
+        // The same TV can be advertised under several service types; match by name or address
+        val idx = list.indexOfFirst { it.name == updatedTv.name || it.host == updatedTv.host }
         if (idx >= 0) {
             list[idx] = updatedTv
         } else {
             list.add(updatedTv)
         }
-        _discoveredTvs.value = list.distinctBy { it.name }
+        _discoveredTvs.value = list.distinctBy { it.host }
         Log.i(TAG, "📊 TVs: ${_discoveredTvs.value.size} - ${updatedTv.displayName}")
     }
 
@@ -127,7 +141,79 @@ class RemoteRepository @Inject constructor(
 
 
     /** Sends one key tap to the TV over the active remote session. */
-    suspend fun sendKey(key: TvKey) {
-        session.send(KeyPayloadFactory.keyPress(key))
+    suspend fun sendKey(key: TvKey, action: KeyAction = KeyAction.TAP) {
+        session.send(KeyPayloadFactory.keyPress(key, action))
     }
+
+    /** Serialises typing so edits made in quick succession reach the TV in order. */
+    private val typingLock = Mutex()
+
+    /** When the last text edit was sent, on the [SystemClock.elapsedRealtime] clock. */
+    private var lastEditAt = 0L
+
+    /** Waits until at least [EDIT_GAP_MS] have passed since the last text edit. */
+    suspend fun awaitEditSlot() {
+        val wait = lastEditAt + EDIT_GAP_MS - SystemClock.elapsedRealtime()
+        if (wait > 0) delay(wait)
+    }
+
+    /**
+     * Makes the TV's focused text field go from [previous] to [current], assuming the TV's cursor
+     * is at the end.
+     *
+     * With a text input session open the edit goes through it (see [typeAsText]). Otherwise the
+     * difference is typed as key presses: backspaces over what changed at the end, then the new
+     * characters. Returns the characters that couldn't be typed as key presses and were skipped.
+     */
+    suspend fun typeEdit(previous: String, current: String): List<Char> =
+        typingLock.withLock {
+            if (session.hasTextSession) {
+                typeAsText(previous, current)
+                return@withLock emptyList()
+            }
+
+            val common = previous.commonPrefixWith(current).length
+            repeat(previous.length - common) {
+                session.send(KeyPayloadFactory.keyCode(RemoteKeyCode.KEYCODE_DEL))
+            }
+
+            val skipped = mutableListOf<Char>()
+            for (c in current.substring(common)) {
+                val stroke = TextKeyMapper.toStroke(c)
+                if (stroke == null) {
+                    skipped += c
+                    continue
+                }
+                if (stroke.shift) session.send(KeyPayloadFactory.keyCode(RemoteKeyCode.KEYCODE_SHIFT_LEFT, KeyAction.LONG_START))
+                session.send(KeyPayloadFactory.keyCode(stroke.code))
+                if (stroke.shift) session.send(KeyPayloadFactory.keyCode(RemoteKeyCode.KEYCODE_SHIFT_LEFT, KeyAction.LONG_END))
+            }
+            skipped
+        }
+
+    /**
+     * Sends an edit through the TV's text input session. Observed on the TV: a text edit replaces
+     * the word at the cursor (the text after the last whitespace) and keeps what is before it,
+     * and a delete edit removes characters before the cursor.
+     *
+     * So whatever differs at the end of [previous] is deleted first, then, if [current] has new
+     * characters, the word at the cursor plus those characters is sent so it replaces that word:
+     * "why" then "why " then "why h" go out as "why", "why " and "h".
+     */
+    private suspend fun typeAsText(previous: String, current: String) {
+        val common = previous.commonPrefixWith(current).length
+        val deleted = previous.length - common
+        if (deleted > 0) {
+            session.deleteText(deleted)
+            lastEditAt = SystemClock.elapsedRealtime()
+        }
+        if (current.length > common) {
+            if (deleted > 0) awaitEditSlot()
+            session.sendText(current.substring(wordStart(current.substring(0, common))))
+            lastEditAt = SystemClock.elapsedRealtime()
+        }
+    }
+
+    /** Index where the last whitespace-delimited word of [text] starts. */
+    private fun wordStart(text: String): Int = text.indexOfLast { it.isWhitespace() } + 1
 }

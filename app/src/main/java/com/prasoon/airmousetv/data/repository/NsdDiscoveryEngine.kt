@@ -17,7 +17,10 @@ import javax.inject.Inject
 import javax.inject.Singleton
 
 private const val TAG_NSD = "NsdDiscoveryEngine"
-private const val SERVICE_TYPE = "_googlecast._tcp."
+private const val SERVICE_TYPE_CAST = "_googlecast._tcp."
+// Advertised by the TV's remote service itself (port 6466), so it is present whenever the remote works
+private const val SERVICE_TYPE_REMOTE = "_androidtvremote2._tcp."
+private val SERVICE_TYPES = listOf(SERVICE_TYPE_REMOTE, SERVICE_TYPE_CAST)
 
 /**
  * Callback interface for discovery events - RemoteRepository implements this
@@ -37,8 +40,8 @@ class NsdDiscoveryEngine @Inject constructor(
     private val executor = Executors.newSingleThreadExecutor()
 
     // Original listener properties (moved from RemoteRepository)
-    private var discoveryListener: NsdManager.DiscoveryListener? = null
-    private var serviceInfoCallback: NsdManager.ServiceInfoCallback? = null
+    private val discoveryListeners = mutableListOf<NsdManager.DiscoveryListener>()
+    private val serviceInfoCallbacks = mutableListOf<NsdManager.ServiceInfoCallback>()
     private var resolveListener: NsdManager.ResolveListener? = null
 
     private var multicastLock: WifiManager.MulticastLock? = null
@@ -51,20 +54,23 @@ class NsdDiscoveryEngine @Inject constructor(
     }
 
     fun startDiscovery() {
-        if (discoveryListener != null) {
+        if (discoveryListeners.isNotEmpty()) {
             Log.w(TAG_NSD, "⚠️ Discovery already active")
             return
         }
 
         Log.d(TAG_NSD, "🔍 Starting TV discovery...")
-        discoveryListener = createDiscoveryListener()
-        nsdManager.discoverServices(SERVICE_TYPE, NsdManager.PROTOCOL_DNS_SD, discoveryListener!!)
+        SERVICE_TYPES.forEach { type ->
+            val listener = createDiscoveryListener(type)
+            discoveryListeners.add(listener)
+            nsdManager.discoverServices(type, NsdManager.PROTOCOL_DNS_SD, listener)
+        }
     }
 
     fun stopDiscovery() {
         Log.d(TAG_NSD, "🛑 Stopping discovery...")
 
-        discoveryListener?.let { listener ->
+        discoveryListeners.forEach { listener ->
             try {
                 nsdManager.stopServiceDiscovery(listener)
                 Log.d(TAG_NSD, "✅ Discovery stopped")
@@ -74,10 +80,9 @@ class NsdDiscoveryEngine @Inject constructor(
                 Log.w(TAG_NSD, "⚠️ stopServiceDiscovery failed", e)
             }
         }
+        discoveryListeners.clear()
 
-        // Null ALL listeners immediately (your original cleanup)
-        discoveryListener = null
-        serviceInfoCallback?.let {
+        serviceInfoCallbacks.forEach {
             try {
                 if (Build.VERSION.SDK_INT >= 34) {
                     nsdManager.unregisterServiceInfoCallback(it)
@@ -85,8 +90,8 @@ class NsdDiscoveryEngine @Inject constructor(
             } catch (e: Exception) {
                 Log.w(TAG_NSD, "ServiceInfoCallback cleanup ignored", e)
             }
-            serviceInfoCallback = null
         }
+        serviceInfoCallbacks.clear()
         resolveListener = null
 
         Log.d(TAG_NSD, "🧹 Discovery fully cleaned")
@@ -106,7 +111,7 @@ class NsdDiscoveryEngine @Inject constructor(
         Log.d(TAG_NSD, "🔍 HTTP scan needed for: ${tv.host}")
     }
 
-    private fun createDiscoveryListener() = object : NsdManager.DiscoveryListener {
+    private fun createDiscoveryListener(browseType: String) = object : NsdManager.DiscoveryListener {
         override fun onDiscoveryStarted(regType: String) {
             Log.i(TAG_NSD, "✅ Discovery started for: $regType")
         }
@@ -118,7 +123,7 @@ class NsdDiscoveryEngine @Inject constructor(
         override fun onServiceFound(serviceInfo: NsdServiceInfo) {
             Log.i(TAG_NSD, "📡 Service found: ${serviceInfo.serviceName}/${serviceInfo.serviceType}")
 
-            if (!serviceInfo.serviceType.contains(SERVICE_TYPE)) {
+            if (!serviceInfo.serviceType.contains(browseType)) {
                 Log.d(TAG_NSD, "❌ Skipping non-TV service")
                 return
             }
@@ -159,6 +164,7 @@ class NsdDiscoveryEngine @Inject constructor(
                 val host = info.host?.hostAddress ?: return
                 val port = info.port.takeIf { it > 0 } ?: return
 
+                Log.d(TAG_NSD, "📍 Resolved ${info.serviceName} -> $host:$port")
                 Log.d(TAG_NSD, "📋 TXT Records: ${info.attributes.map {
                     "${it.key}=${it.value?.toString(Charsets.UTF_8)?.take(50)}"
                 }}")
@@ -167,6 +173,7 @@ class NsdDiscoveryEngine @Inject constructor(
                     ?: info.attributes["friendlyName"]?.toString(Charsets.UTF_8)
                     ?: info.attributes["name"]?.toString(Charsets.UTF_8)
                     ?: info.attributes["deviceName"]?.toString(Charsets.UTF_8)
+                    ?: info.serviceName.takeIf { discovered.serviceType.contains(SERVICE_TYPE_REMOTE) }
 
                 if (!friendlyNameFromTxt.isNullOrBlank()) {
                     Log.i(TAG_NSD, "🎉 TXT friendlyName: $friendlyNameFromTxt")
@@ -192,7 +199,7 @@ class NsdDiscoveryEngine @Inject constructor(
             override fun onServiceInfoCallbackUnregistered() {}
         }
 
-        serviceInfoCallback = callback
+        serviceInfoCallbacks.add(callback)
         nsdManager.registerServiceInfoCallback(baseInfo, executor, callback)
     }
 
@@ -204,6 +211,7 @@ class NsdDiscoveryEngine @Inject constructor(
             override fun onServiceResolved(info: NsdServiceInfo) {
                 val host = info.host?.hostAddress ?: return
                 val port = info.port.takeIf { it > 0 } ?: return
+                Log.d(TAG_NSD, "📍 Resolved ${info.serviceName} -> $host:$port")
 
                 Log.d(TAG_NSD, "📋 TXT Records: ${info.attributes.map {
                     "${it.key}=${it.value?.toString(Charsets.UTF_8)?.take(50)}"
@@ -213,6 +221,7 @@ class NsdDiscoveryEngine @Inject constructor(
                     ?: info.attributes["friendlyName"]?.toString(Charsets.UTF_8)
                     ?: info.attributes["name"]?.toString(Charsets.UTF_8)
                     ?: info.attributes["deviceName"]?.toString(Charsets.UTF_8)
+                    ?: info.serviceName.takeIf { discovered.serviceType.contains(SERVICE_TYPE_REMOTE) }
 
                 if (!friendlyNameFromTxt.isNullOrBlank()) {
                     Log.i(TAG_NSD, "🎉 TXT friendlyName: $friendlyNameFromTxt")
