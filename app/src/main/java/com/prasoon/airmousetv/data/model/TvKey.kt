@@ -17,8 +17,8 @@ enum class TvKey {
     VOLUME_DOWN,
     POWER,
     MUTE,
-    SETTINGS,
     PLAY_PAUSE,
     PREVIOUS,
-    NEXT
+    NEXT,
+    ENTER
 }

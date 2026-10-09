@@ -17,9 +17,9 @@ object TvKeyMapper {
         TvKey.VOLUME_DOWN -> RemoteKeyCode.KEYCODE_VOLUME_DOWN
         TvKey.POWER -> RemoteKeyCode.KEYCODE_POWER
         TvKey.MUTE -> RemoteKeyCode.KEYCODE_MUTE
-        TvKey.SETTINGS -> RemoteKeyCode.KEYCODE_SETTINGS
         TvKey.PLAY_PAUSE -> RemoteKeyCode.KEYCODE_MEDIA_PLAY_PAUSE
         TvKey.PREVIOUS -> RemoteKeyCode.KEYCODE_MEDIA_PREVIOUS
         TvKey.NEXT -> RemoteKeyCode.KEYCODE_MEDIA_NEXT
+        TvKey.ENTER -> RemoteKeyCode.KEYCODE_ENTER
     }
 }
