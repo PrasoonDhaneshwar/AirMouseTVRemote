@@ -12,7 +12,6 @@ private const val TAG_SCANNER = "TvPortScanner"
 
 /**
  * Performs HTTP GETs against known TV ports and extracts friendlyName/deviceName.
- * Keeps all original log messages from your previous fetchFriendlyName() implementation.
  */
 @Singleton
 class TvPortScanner @Inject constructor(

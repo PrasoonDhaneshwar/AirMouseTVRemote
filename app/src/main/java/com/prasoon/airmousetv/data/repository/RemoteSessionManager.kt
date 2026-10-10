@@ -14,6 +14,9 @@ import com.prasoon.airmousetv.proto.remote.RemoteMessage
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.first
@@ -65,6 +68,10 @@ private const val SUPPORTED_FEATURES = 1 or 2 or 4 or 32 or 64 or 512
 private const val TRUSTED_CHECK_TIMEOUT_MS = 3000L
 /** TCP connect timeout; a TV on the same LAN answers (or refuses) well within this. */
 private const val CONNECT_TIMEOUT_MS = 4000
+/** No bytes from the TV for this long on the remote connection means it is gone; it normally pings every ~5 s. */
+private const val REMOTE_READ_TIMEOUT_MS = 15_000
+/** Shorter timeout for the pre-connect reachability probe, so an off TV is reported quickly. */
+private const val REACHABILITY_TIMEOUT_MS = 1500
 
 /** The TV's address didn't accept a connection: it is off, still booting, or has a new IP. */
 class TvUnreachableException(host: String, cause: Throwable) : Exception(
@@ -169,6 +176,28 @@ class RemoteSessionManager(private val context: Context) {
     }
 
     /**
+     * Quick check that something is listening on the TV's remote or pairing port, before the slower
+     * TLS connect. A plain TCP connect to both ports in parallel; true if either accepts within
+     * [REACHABILITY_TIMEOUT_MS]. A TV that is off or asleep times out or refuses on both.
+     */
+    suspend fun isReachable(host: String): Boolean = coroutineScope {
+        listOf(REMOTE_PORT, PAIRING_PORT)
+            .map { port ->
+                async(Dispatchers.IO) {
+                    try {
+                        Socket().use { it.connect(InetSocketAddress(host, port), REACHABILITY_TIMEOUT_MS) }
+                        true
+                    } catch (e: Exception) {
+                        Log.d(TAG, "Port $port on $host not reachable: ${e.message}")
+                        false
+                    }
+                }
+            }
+            .awaitAll()
+            .any { it }
+    }
+
+    /**
      * Opens the remote session and waits briefly for the TV to activate it.
      * Returns true if the TV already trusts our certificate; false if it refused, dropped us
      * or stayed silent, in which case pairing is needed.
@@ -210,6 +239,10 @@ class RemoteSessionManager(private val context: Context) {
     /** Connects to the remote-control port and starts reading from it. */
     private suspend fun openRemoteConn(host: String): Conn {
         val conn = openTlsSocket(host, REMOTE_PORT)
+        // A TV switched off abruptly never closes the socket, so a blocking read would wait for hours.
+        // It pings every few seconds, so silence for this long means it is gone: the read throws and
+        // the session reports Disconnected, which starts the reconnect.
+        conn.socket.soTimeout = REMOTE_READ_TIMEOUT_MS
         remoteConn = conn
         startReaderLoop(conn, ::handleRemoteFrame)
         return conn
@@ -355,6 +388,9 @@ class RemoteSessionManager(private val context: Context) {
 
     /** Cleans up after an unexpected read failure and reports it: Disconnected for the remote, Error while pairing. */
     private fun onConnectionLost(conn: Conn, e: Exception) {
+        if (e is java.net.SocketTimeoutException) {
+            Log.w(TAG, "No data from the TV for ${REMOTE_READ_TIMEOUT_MS / 1000}s, treating it as gone")
+        }
         Log.e(TAG, "Connection lost in phase $phase", e)
         closeConn(conn)
         if (conn === remoteConn) {

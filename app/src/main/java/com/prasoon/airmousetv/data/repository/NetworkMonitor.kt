@@ -46,7 +46,7 @@ class NetworkMonitor @Inject constructor(
         )
 
     init {
-        // Initial debug logs – equivalent to your checkNetwork()
+        // Log the starting network state, to help debug connectivity problems
         try {
             Log.d(TAG, "📶 WiFi enabled: ${wifiManager.isWifiEnabled}")
             Log.d(TAG, "🌐 Network connected: ${currentNetworkConnected()}")

@@ -15,6 +15,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
@@ -63,7 +64,7 @@ class RemoteRepository @Inject constructor(
         }
 
         discoveryJob = scope.launch {
-            // ✅ FIXED: Check network synchronously (no suspend Flow.first())
+            // Read the latest value directly rather than suspending on the flow
             if (!networkMonitor.isNetworkAvailable.value) {
                 Log.d(TAG, "🌐 Network not connected, waiting...")
                 return@launch
@@ -81,10 +82,6 @@ class RemoteRepository @Inject constructor(
         Log.d(TAG, "🧹 Discovery fully cleaned")
     }
 
-    fun clearPortCache() {
-        tvCacheManager.clearAll()
-    }
-
     fun releaseResources() {
         nsdDiscoveryEngine.releaseResources()
     }
@@ -97,7 +94,7 @@ class RemoteRepository @Inject constructor(
 
     override fun onHttpScanNeeded(tv: DiscoveredTv) {
         scope.launch {
-            // Quick fallback for instant UI (your original logic)
+            // Show a name derived from the service name straight away; the HTTP lookup below may replace it
             val fallbackName = tv.name.split("-").first()
                 .replace(Regex("[^A-Z0-9]"), "").take(8).uppercase() + " TV"
             updateDiscoveredList(tv.copy(friendlyName = fallbackName))
@@ -115,28 +112,39 @@ class RemoteRepository @Inject constructor(
         }
     }
 
-    // Your original updateDiscoveredList with service lost handling
+    /** Adds [updatedTv], or replaces the entry already listed for the same TV. */
     private fun updateDiscoveredList(updatedTv: DiscoveredTv) {
-        val list = _discoveredTvs.value.toMutableList()
-        // The same TV can be advertised under several service types; match by name or address
-        val idx = list.indexOfFirst { it.name == updatedTv.name || it.host == updatedTv.host }
-        if (idx >= 0) {
-            list[idx] = updatedTv
-        } else {
-            list.add(updatedTv)
+        // Atomic: this runs on the IO scope while onServiceLost runs on NSD's thread
+        _discoveredTvs.update { current ->
+            val list = current.toMutableList()
+            // The same TV can be advertised under several service types; match by name or address
+            val idx = list.indexOfFirst { it.name == updatedTv.name || it.host == updatedTv.host }
+            if (idx >= 0) {
+                list[idx] = updatedTv
+            } else {
+                list.add(updatedTv)
+            }
+            list.distinctBy { it.host }
         }
-        _discoveredTvs.value = list.distinctBy { it.host }
         Log.i(TAG, "📊 TVs: ${_discoveredTvs.value.size} - ${updatedTv.displayName}")
     }
 
-    // Handle service lost (your original logic)
-    fun onServiceLost(serviceName: String) {
-        val currentList = _discoveredTvs.value
-        val filtered = currentList.filterNot { it.name == serviceName }
-        if (filtered.size < currentList.size) {
-            _discoveredTvs.value = filtered
-            Log.d(TAG, "📊 Removed lost service, now ${filtered.size} TVs")
+    /** Forget every TV found so far, e.g. before a rescan, so a TV that has since been switched off drops out. */
+    fun clearDiscovered() {
+        _discoveredTvs.value = emptyList()
+    }
+
+    /** Drops the TV at [host] from the list, e.g. after it stopped answering. */
+    fun removeDiscovered(host: String) {
+        _discoveredTvs.value = _discoveredTvs.value.filterNot { it.host == host }
+    }
+
+    /** Drops the TV whose remote service stopped being advertised, matched by [host] when known, else by [serviceName]. */
+    override fun onServiceLost(serviceName: String, host: String?) {
+        _discoveredTvs.update { list ->
+            list.filterNot { it.name == serviceName || (host != null && it.host == host) }
         }
+        Log.d(TAG, "📊 Service lost: $serviceName, now ${_discoveredTvs.value.size} TVs")
     }
 
 

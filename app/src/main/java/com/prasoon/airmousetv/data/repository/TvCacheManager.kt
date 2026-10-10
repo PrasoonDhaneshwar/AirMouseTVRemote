@@ -28,11 +28,4 @@ class TvCacheManager @Inject constructor(
         val port = prefs.getInt("port_$ip", -1)
         return if (port > 0) port else null
     }
-
-    fun clearAll() {
-        prefs.edit(commit = true) {
-            clear()
-        }
-        Log.i(TAG, "🗑️ Cleared all TV port cache")
-    }
 }
