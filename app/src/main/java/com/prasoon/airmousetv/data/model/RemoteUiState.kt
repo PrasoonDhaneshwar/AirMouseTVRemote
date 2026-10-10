@@ -18,6 +18,8 @@ data class RemoteUiState(
     val discoveredTvs: List<DiscoveredTv> = emptyList(),
     val isDiscovering: Boolean = false,
     val isRefreshing: Boolean = false,
+    /** True while the selected TV is being checked for reachability, before the pairing screen opens. */
+    val isCheckingTv: Boolean = false,
     /** Code typed by the user: up to 6 hex digits. */
     val pairingCode: String = "",
     /** True once the TV is showing its code, so the screen swaps the spinner for the code field. */

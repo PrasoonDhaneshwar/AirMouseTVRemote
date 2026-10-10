@@ -1,6 +1,5 @@
 package com.prasoon.airmousetv.ui.screens
 
-
 import androidx.compose.animation.core.LinearEasing
 import androidx.compose.animation.core.RepeatMode
 import androidx.compose.animation.core.animateFloat
@@ -16,53 +15,48 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
-import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.ArrowForward
-import androidx.compose.material.icons.filled.DeleteSweep
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.SignalWifi4Bar
 import androidx.compose.material.icons.filled.Tv
-import androidx.compose.material3.Button
-import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
-import androidx.compose.material3.CircularProgressIndicator
-import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
-import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
-import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.repeatOnLifecycle
 import com.prasoon.airmousetv.data.model.DiscoveredTv
+import com.prasoon.airmousetv.data.model.RemoteUiState
 import com.prasoon.airmousetv.presentation.RemoteViewModel
+import com.prasoon.airmousetv.ui.theme.AirMouseTVRemoteTheme
+import com.prasoon.airmousetv.ui.theme.Online
 
-@OptIn(ExperimentalMaterial3Api::class)
+/** Lists TVs found on the network. Tapping a row connects to it ([onTvSelected]). */
 @Composable
 fun DiscoveryScreen(
     viewModel: RemoteViewModel = hiltViewModel(),
@@ -70,7 +64,6 @@ fun DiscoveryScreen(
     modifier: Modifier = Modifier
 ) {
     val uiState by viewModel.uiState.collectAsState()
-    // Lifecycle-aware discovery
     val lifecycleOwner = LocalLifecycleOwner.current
 
     // Starts discovery when STARTED, cancels when STOPPED
@@ -84,221 +77,277 @@ fun DiscoveryScreen(
             viewModel.stopDiscovery()
         }
     }
-    Box(
+
+    DiscoveryContent(
+        uiState = uiState,
+        onRefresh = viewModel::retryDiscovery,
+        onTvClick = onTvSelected,
         modifier = modifier
-            .fillMaxSize()
-            .background(
-                brush = Brush.verticalGradient(
-                    colors = listOf(
-                        Color(0xFF0A0A0A),
-                        Color(0xFF1A1A2E),
-                        Color(0xFF16213E)
-                    )
-                )
-            )
-    ) {
+    )
+}
+
+@Composable
+private fun DiscoveryContent(
+    uiState: RemoteUiState,
+    onRefresh: () -> Unit,
+    onTvClick: (DiscoveredTv) -> Unit,
+    modifier: Modifier = Modifier
+) {
+    val scanning = uiState.isDiscovering
+    val checking = uiState.isCheckingTv
+    val found = uiState.discoveredTvs.isNotEmpty()
+
+    Box(modifier = modifier.fillMaxSize().background(MaterialTheme.colorScheme.background)) {
         Column(
             modifier = Modifier
                 .fillMaxSize()
-                .padding(24.dp)
+                .statusBarsPadding()
+                .navigationBarsPadding()
+                .padding(horizontal = 24.dp, vertical = 16.dp),
+            horizontalAlignment = Alignment.CenterHorizontally
         ) {
-            // Scanning Status
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.Center
-            ) {
-                if (uiState.isDiscovering) {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        CircularProgressIndicator(
-                            color = Color.Cyan,
-                            strokeWidth = 2.dp,
-                            modifier = Modifier.size(24.dp)
-                        )
-                        Spacer(modifier = Modifier.width(12.dp))
-                        Column {
-                            Text(
-                                text = "Scanning Network",
-                                fontSize = 24.sp,
-                                fontWeight = FontWeight.Bold,
-                                color = Color.White
-                            )
-                            Text(
-                                text = "Scanning for compatible displays...",
-                                fontSize = 14.sp,
-                                color = Color.White.copy(alpha = 0.7f)
-                            )
-                        }
-                    }
+            Text(
+                text = "DISCOVERY MODE",
+                style = MaterialTheme.typography.labelMedium,
+                color = MaterialTheme.colorScheme.primary
+            )
+
+            Spacer(Modifier.height(32.dp))
+
+            ScanIndicator(
+                active = scanning || checking,
+                color = when {
+                    scanning || checking -> MaterialTheme.colorScheme.primary
+                    found -> Online
+                    else -> MaterialTheme.colorScheme.secondary
                 }
+            )
+
+            Spacer(Modifier.height(16.dp))
+            Text(
+                text = when {
+                    checking -> "Checking TV"
+                    scanning -> "Scanning Network"
+                    found -> "Scan Complete"
+                    else -> "No Displays Found"
+                },
+                style = MaterialTheme.typography.headlineMedium,
+                color = MaterialTheme.colorScheme.onBackground
+            )
+            Text(
+                text = when {
+                    checking -> "Making sure it is awake..."
+                    scanning -> "Searching for compatible displays..."
+                    found -> "Tap a display to connect."
+                    else -> "Make sure your TV is on and connected to the same Wi-Fi, then tap refresh."
+                },
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                textAlign = TextAlign.Center
+            )
+            uiState.error?.let {
+                Spacer(Modifier.height(12.dp))
+                Text(
+                    text = it,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.secondary,
+                    textAlign = TextAlign.Center
+                )
             }
 
-            Spacer(modifier = Modifier.height(48.dp))
+            Spacer(Modifier.height(24.dp))
 
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                Column {
+                Text(
+                    text = "AVAILABLE TARGETS",
+                    style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                Row(verticalAlignment = Alignment.CenterVertically) {
                     Text(
-                        text = "Available devices",
-                        fontSize = 14.sp,
-                        fontWeight = FontWeight.Bold,
-                        color = Color.Cyan
+                        text = "${uiState.discoveredTvs.size} FOUND",
+                        style = MaterialTheme.typography.labelMedium,
+                        color = MaterialTheme.colorScheme.primary
                     )
-                    Text(
-                        text = "${uiState.discoveredTvs.size} found",
-                        fontSize = 14.sp,
-                        color = Color.White.copy(alpha = 0.7f)
-                    )
-                }
-
-                IconButton(
-                    onClick = { viewModel.retryDiscovery() },
-                    modifier = Modifier.size(40.dp)
-                ) {
-
-                    val infiniteTransition = rememberInfiniteTransition(label = "refresh")
-
-                    val rotation by if (uiState.isRefreshing) {
-                        infiniteTransition.animateFloat(
-                            initialValue = 0f,
-                            targetValue = 360f,
-                            animationSpec = infiniteRepeatable(
-                                animation = tween(1000, easing = LinearEasing),
-                                repeatMode = RepeatMode.Restart
-                            ),
-                            label = "rotation"
-                        )
-                    } else {
-                        remember { mutableStateOf(0f) }
-                    }
-                    Icon(
-                        Icons.Default.Refresh,
-                        contentDescription = "Refresh scan",
-                        tint = Color.Cyan,
-                        modifier = Modifier
-                            .size(24.dp)
-                            .graphicsLayer(rotationZ = rotation)
-                    )
+                    RefreshButton(spinning = uiState.isRefreshing, onClick = onRefresh)
                 }
             }
 
-            Spacer(modifier = Modifier.height(24.dp))
+            Spacer(Modifier.height(8.dp))
 
-            // TV List
             LazyColumn(
-                verticalArrangement = Arrangement.spacedBy(16.dp),
+                verticalArrangement = Arrangement.spacedBy(12.dp),
                 modifier = Modifier.weight(1f)
             ) {
-                items(uiState.discoveredTvs) { tv ->
-                    TargetItem(
-                        tv = tv,
-                        onClick = { onTvSelected(tv) }
-                    )
+                items(uiState.discoveredTvs, key = { it.name }) { tv ->
+                    TargetItem(tv = tv, enabled = !checking, onClick = { onTvClick(tv) })
                 }
             }
-
-            Spacer(modifier = Modifier.height(32.dp))
-
-            OutlinedButton(
-                onClick = { viewModel.clearTvCache() },
-                modifier = Modifier.fillMaxWidth(),
-                shape = RoundedCornerShape(12.dp),
-                colors = ButtonDefaults.buttonColors(containerColor = Color.Transparent)
-            ) {
-                Icon(Icons.Default.DeleteSweep, contentDescription = null, tint = Color.White.copy(alpha = 0.7f))
-                Spacer(modifier = Modifier.width(8.dp))
-                Text(
-                    text = "Clear TV Cache",
-                    color = Color.White.copy(alpha = 0.7f),
-                    fontSize = 14.sp
-                )
-            }
-            Spacer(modifier = Modifier.height(12.dp))
-
-            Button(
-                onClick = { /* Connect */ },
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .height(56.dp),
-                shape = RoundedCornerShape(12.dp),
-                colors = ButtonDefaults.buttonColors(containerColor = Color.Cyan)
-            ) {
-                Text(
-                    text = "ESTABLISH LINK",
-                    fontSize = 16.sp,
-                    fontWeight = FontWeight.Bold,
-                    color = Color.Black
-                )
-            }
         }
+    }
+}
+
+/** A pulsing dot while busy; a steady one, in [color], once done. */
+@Composable
+private fun ScanIndicator(active: Boolean, color: Color) {
+    val transition = rememberInfiniteTransition(label = "scan")
+    val pulse by transition.animateFloat(
+        initialValue = 1f,
+        targetValue = 2.4f,
+        animationSpec = infiniteRepeatable(tween(1400, easing = LinearEasing), RepeatMode.Restart),
+        label = "pulse"
+    )
+    Box(modifier = Modifier.size(72.dp), contentAlignment = Alignment.Center) {
+        if (active) {
+            Box(
+                Modifier
+                    .size(16.dp)
+                    .graphicsLayer(scaleX = pulse, scaleY = pulse, alpha = (2.4f - pulse) / 1.4f * 0.5f)
+                    .background(color, CircleShape)
+            )
+        }
+        Box(Modifier.size(16.dp).background(color, CircleShape))
+    }
+}
+
+@Composable
+private fun RefreshButton(spinning: Boolean, onClick: () -> Unit) {
+    val transition = rememberInfiniteTransition(label = "refresh")
+    val spin by transition.animateFloat(
+        initialValue = 0f,
+        targetValue = 360f,
+        animationSpec = infiniteRepeatable(tween(1000, easing = LinearEasing), RepeatMode.Restart),
+        label = "rotation"
+    )
+    IconButton(onClick = onClick, modifier = Modifier.size(40.dp)) {
+        Icon(
+            Icons.Default.Refresh,
+            contentDescription = "Refresh scan",
+            tint = MaterialTheme.colorScheme.primary,
+            modifier = Modifier.size(20.dp).graphicsLayer(rotationZ = if (spinning) spin else 0f)
+        )
     }
 }
 
 @Composable
 fun TargetItem(
     tv: DiscoveredTv,
+    enabled: Boolean,
     onClick: () -> Unit
 ) {
     Card(
         onClick = onClick,
-        modifier = Modifier
-            .fillMaxWidth()
-            .height(72.dp),
-        shape = RoundedCornerShape(12.dp),
+        enabled = enabled,
+        modifier = Modifier.fillMaxWidth().height(72.dp),
+        shape = MaterialTheme.shapes.medium,
         colors = CardDefaults.cardColors(
-            containerColor = Color(0xFF2A2A3E).copy(alpha = 0.6f)
+            containerColor = MaterialTheme.colorScheme.surfaceVariant,
+            disabledContainerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)
         )
     ) {
         Row(
-            modifier = Modifier
-                .fillMaxSize()
-                .padding(horizontal = 16.dp, vertical = 12.dp),
+            modifier = Modifier.fillMaxSize().padding(horizontal = 16.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
-            // Device Icon
             Box(
                 modifier = Modifier
                     .size(40.dp)
-                    .clip(RoundedCornerShape(8.dp))
-                    .background(Color.Cyan.copy(alpha = 0.2f)),
+                    .clip(MaterialTheme.shapes.small)
+                    .background(MaterialTheme.colorScheme.primary.copy(alpha = 0.2f)),
                 contentAlignment = Alignment.Center
             ) {
-                Icon(Icons.Default.Tv, contentDescription = null, tint = Color.Cyan, modifier = Modifier.size(24.dp))
+                Icon(
+                    Icons.Default.Tv,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.primary,
+                    modifier = Modifier.size(22.dp)
+                )
             }
 
-            Spacer(modifier = Modifier.width(16.dp))
+            Spacer(Modifier.width(16.dp))
 
-            // Device Info
             Column(modifier = Modifier.weight(1f)) {
+                Text(text = tv.displayName, style = MaterialTheme.typography.titleMedium, maxLines = 1)
                 Text(
-                    text = tv.displayName,  // Uses friendlyName or truncated rawName
-                    fontSize = 18.sp,
-                    fontWeight = FontWeight.Bold,
-                    color = Color.White
-                )
-                Text(
-                    text = tv.name.take(8) + "..." + " • ${tv.host}",
-                    fontSize = 12.sp,
-                    color = Color.White.copy(alpha = 0.6f)
+                    text = tv.host,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
             }
 
-            // Signal Strength
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Icon(Icons.Default.SignalWifi4Bar, tint = Color.Cyan.copy(alpha = 0.7f), contentDescription = null)
-                Spacer(modifier = Modifier.width(8.dp))
-                Icon(Icons.Default.ArrowForward, tint = Color.White.copy(alpha = 0.5f), contentDescription = null)
-            }
+            Icon(
+                Icons.Default.SignalWifi4Bar,
+                contentDescription = "Online",
+                tint = Online
+            )
         }
     }
 }
 
-@Preview(showBackground = true, widthDp = 360, heightDp = 800)
+private val previewTvs = listOf(
+    DiscoveredTv(name = "living-room-tv", friendlyName = "Living Room TV", host = "192.168.1.15", port = 6466),
+    DiscoveredTv(name = "bedroom-roku", friendlyName = "Bedroom Roku", host = "192.168.1.22", port = 6466),
+    DiscoveredTv(name = "samsung-7", friendlyName = "Samsung Series 7", host = "192.168.1.40", port = 6466),
+)
+
+@Preview(showBackground = true, widthDp = 390, heightDp = 844, name = "Scanning")
 @Composable
-fun DiscoveryScreenPreview() {
-    DiscoveryScreen(
-        onTvSelected = {}
-    )
+private fun DiscoveryScanningPreview() {
+    AirMouseTVRemoteTheme {
+        DiscoveryContent(
+            uiState = RemoteUiState(discoveredTvs = previewTvs, isDiscovering = true),
+            onRefresh = {}, onTvClick = {}
+        )
+    }
+}
+
+@Preview(showBackground = true, widthDp = 390, heightDp = 844, name = "Scan complete")
+@Composable
+private fun DiscoveryCompletePreview() {
+    AirMouseTVRemoteTheme {
+        DiscoveryContent(
+            uiState = RemoteUiState(discoveredTvs = previewTvs),
+            onRefresh = {}, onTvClick = {}
+        )
+    }
+}
+
+@Preview(showBackground = true, widthDp = 390, heightDp = 844, name = "Checking TV")
+@Composable
+private fun DiscoveryCheckingPreview() {
+    AirMouseTVRemoteTheme {
+        DiscoveryContent(
+            uiState = RemoteUiState(discoveredTvs = previewTvs, isCheckingTv = true),
+            onRefresh = {}, onTvClick = {}
+        )
+    }
+}
+
+@Preview(showBackground = true, widthDp = 390, heightDp = 844, name = "Nothing found")
+@Composable
+private fun DiscoveryEmptyPreview() {
+    AirMouseTVRemoteTheme {
+        DiscoveryContent(
+            uiState = RemoteUiState(),
+            onRefresh = {}, onTvClick = {}
+        )
+    }
+}
+
+@Preview(showBackground = true, widthDp = 390, heightDp = 844, name = "TV not responding")
+@Composable
+private fun DiscoveryUnreachablePreview() {
+    AirMouseTVRemoteTheme {
+        DiscoveryContent(
+            uiState = RemoteUiState(
+                discoveredTvs = previewTvs.drop(1),
+                error = "Living Room TV isn't responding at 192.168.1.15, so it was removed from the list. Turn it on and tap refresh."
+            ),
+            onRefresh = {}, onTvClick = {}
+        )
+    }
 }
