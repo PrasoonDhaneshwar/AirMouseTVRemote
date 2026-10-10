@@ -15,16 +15,32 @@ import com.prasoon.airmousetv.data.repository.RemoteSessionManager
 import com.prasoon.airmousetv.data.repository.TvUnreachableException
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.coroutines.launch
 import javax.inject.Inject
 
 private const val TAG = "RemoteViewModel"
 /** How many times a dropped session is retried before giving up and returning to discovery. */
+/** How long a scan shows as "scanning" before it settles into found / nothing found. */
+private const val SCAN_WINDOW_MS = 8000L
+
+/** How long a TV gets to show its pairing code, or accept us, before the attempt is abandoned. */
+private const val PAIRING_RESPONSE_TIMEOUT_MS = 15_000L
+
+/** How often listed TVs are re-checked while discovery is showing. */
+private const val LIVENESS_INTERVAL_MS = 5000L
+/** Consecutive failed checks before a TV is dropped from the list; one miss can be a dropped packet. */
+private const val LIVENESS_MAX_MISSES = 2
+
 private const val MAX_RECONNECT_ATTEMPTS = 4
 /** Wait before the first retry; doubles on each attempt. */
 private const val RECONNECT_BASE_DELAY_MS = 1000L
@@ -44,6 +60,10 @@ class RemoteViewModel @Inject constructor(
     val uiState: StateFlow<RemoteUiState> = _uiState.asStateFlow()
     /** Collects the repository's TV list into [uiState]; replaced on each discovery restart. */
     private var tvCollectorJob: Job? = null  // Track the collector
+    private var scanTimeoutJob: Job? = null
+    private var livenessJob: Job? = null
+    private var pairingWatchJob: Job? = null
+    private var discoveryRunning = false
 
     /** Text entry actions waiting to be applied by [launchTextWorker]. */
     private val textActions = Channel<TextAction>(Channel.UNLIMITED)
@@ -118,9 +138,16 @@ class RemoteViewModel @Inject constructor(
     }
 
     fun startDiscovery() {
-        if (_uiState.value.isDiscovering) return
+        // Not isDiscovering: that flips off when the scan window ends while the listener stays up
+        if (discoveryRunning) return
+        discoveryRunning = true
 
         _uiState.value = _uiState.value.copy(isDiscovering = true, error = null)
+        scanTimeoutJob?.cancel()
+        scanTimeoutJob = viewModelScope.launch {
+            delay(SCAN_WINDOW_MS)
+            _uiState.value = _uiState.value.copy(isDiscovering = false)
+        }
 
         // Cancel old collector, start new one
         tvCollectorJob?.cancel()
@@ -132,6 +159,40 @@ class RemoteViewModel @Inject constructor(
         }
 
         repository.startDiscovery()
+        startLivenessChecks()
+    }
+
+    /**
+     * NSD does not reliably report a TV that was switched off, so while discovery is showing every
+     * listed TV is probed periodically and dropped after [LIVENESS_MAX_MISSES] misses in a row.
+     */
+    private fun startLivenessChecks() {
+        livenessJob?.cancel()
+        livenessJob = viewModelScope.launch {
+            val misses = mutableMapOf<String, Int>()
+            while (true) {
+                delay(LIVENESS_INTERVAL_MS)
+                val tvs = repository.discoveredTvs.value
+                misses.keys.retainAll(tvs.map { it.host }.toSet())
+                val results = coroutineScope {
+                    tvs.map { tv -> async { tv to remoteSession.isReachable(tv.host) } }.awaitAll()
+                }
+                for ((tv, ok) in results) {
+                    if (ok) {
+                        misses.remove(tv.host)
+                        continue
+                    }
+                    val count = (misses[tv.host] ?: 0) + 1
+                    if (count >= LIVENESS_MAX_MISSES) {
+                        Log.i(TAG, "${tv.displayName} stopped answering, removing from list")
+                        misses.remove(tv.host)
+                        repository.removeDiscovered(tv.host)
+                    } else {
+                        misses[tv.host] = count
+                    }
+                }
+            }
+        }
     }
 
     /** If the saved TV shows up in discovery at a new address (DHCP change), keep the saved address current. */
@@ -145,27 +206,33 @@ class RemoteViewModel @Inject constructor(
     }
 
     fun retryDiscovery() {
+        if (_uiState.value.isRefreshing) return
         viewModelScope.launch {
-            _uiState.value = _uiState.value.copy(isRefreshing = true, error = null)
+            _uiState.value = _uiState.value.copy(isRefreshing = true, isDiscovering = true, error = null)
+            try {
+                // Force repository clean restart, forgetting TVs found earlier: NSD does not always report a TV
+                // that was switched off as lost
+                repository.stopDiscovery()
+                repository.clearDiscovered()
+                delay(800)  // Let NSD fully reset
 
-            // Force repository clean restart
-            repository.stopDiscovery()
-            delay(800)  // Let NSD fully reset
+                repository.startDiscovery()
+                delay(SCAN_WINDOW_MS)
 
-            repository.startDiscovery()
-
-            // Watch for timeout
-            delay(5000)
-            if (repository.discoveredTvs.value.isEmpty()) {
-            _uiState.value = _uiState.value.copy(
-                    isRefreshing = false,
-                    error = "No TVs found. Try again or check Wi-Fi."
-                )
-    }
-    }
+                if (repository.discoveredTvs.value.isEmpty()) {
+                    _uiState.value = _uiState.value.copy(error = "No TVs found. Try again or check Wi-Fi.")
+                }
+            } finally {
+                // Always stop the spinner, whether or not anything was found
+                _uiState.value = _uiState.value.copy(isRefreshing = false, isDiscovering = false)
+            }
+        }
     }
 
     fun stopDiscovery() {
+        discoveryRunning = false
+        scanTimeoutJob?.cancel()
+        livenessJob?.cancel()
         repository.stopDiscovery()
         _uiState.value = _uiState.value.copy(
             isDiscovering = false
@@ -207,25 +274,101 @@ class RemoteViewModel @Inject constructor(
      * otherwise the TV shows a code and [awaitingCode][RemoteUiState.awaitingCode] turns true.
      */
     fun selectTv(tv: DiscoveredTv) {
+        if (_uiState.value.isCheckingTv) return
         Log.i(TAG, "📺 TV selected: ${tv.displayName}")
 
-        _uiState.value = _uiState.value.copy(
-            mode = RemoteMode.Pairing(tv),
-            awaitingCode = false,
-            pairingCode = "",
-            error = null
-        )
+        _uiState.value = _uiState.value.copy(isCheckingTv = true, error = null)
 
         viewModelScope.launch {
+            // Fail fast, staying on the list, if the TV is off, asleep or has moved
+            val reachable = remoteSession.isReachable(tv.host)
+            if (!reachable) {
+                repository.removeDiscovered(tv.host)
+                _uiState.value = _uiState.value.copy(
+                    isCheckingTv = false,
+                    error = "${tv.displayName} isn't responding at ${tv.host}, so it was removed from the list. " +
+                        "Turn it on and tap refresh."
+                )
+                return@launch
+            }
+
+            _uiState.value = _uiState.value.copy(
+                isCheckingTv = false,
+                mode = RemoteMode.Pairing(tv),
+                awaitingCode = false,
+                pairingCode = ""
+            )
+            watchPairingTv(tv)
             try {
                 // Reconnects straight away if the TV already trusts us, otherwise starts pairing
                 remoteSession.connect(tv.host, "AirMouseTV")
-    } catch (e: Exception) {
-            _uiState.value = _uiState.value.copy(
-                    error = if (e is TvUnreachableException) e.message else "Connection failed: ${e.message}"
-                )
+            } catch (e: Exception) {
+                failConnect(tv, if (e is TvUnreachableException) e.message else "Connection failed: ${e.message}", removeTv = e is TvUnreachableException)
+                return@launch
+            }
+
+            // Connected, or the TV showing its code, should follow quickly; if not, don't leave a spinner running
+            val outcome = withTimeoutOrNull(PAIRING_RESPONSE_TIMEOUT_MS) {
+                remoteSession.connectionState.first {
+                    it is ConnectionState.AwaitingCode || it is ConnectionState.Connected ||
+                        it is ConnectionState.Error || it is ConnectionState.Disconnected
+                }
+            }
+            val stillConnecting = (_uiState.value.mode as? RemoteMode.Pairing)?.tv?.host == tv.host &&
+                !_uiState.value.awaitingCode
+            if (stillConnecting) {
+                when (outcome) {
+                    null -> failConnect(tv, "${tv.displayName} didn't respond. Make sure it is on, then try again.", removeTv = false)
+                    is ConnectionState.Error -> failConnect(tv, outcome.message, removeTv = false)
+                    ConnectionState.Disconnected -> failConnect(tv, "Lost the connection to ${tv.displayName}.", removeTv = false)
+                    else -> Unit
+                }
+            }
+        }
     }
+
+    /** Ends a connection attempt that can't continue: back to the list with [message] shown, so no spinner is left running. */
+    private fun failConnect(tv: DiscoveredTv, message: String?, removeTv: Boolean) {
+        pairingWatchJob?.cancel()
+        remoteSession.close()
+        if (removeTv) repository.removeDiscovered(tv.host)
+        _uiState.value = _uiState.value.copy(
+            mode = RemoteMode.Discovery,
+            isDiscovering = false,
+            awaitingCode = false,
+            pairingCode = "",
+            error = message
+        )
     }
+
+    /**
+     * The pairing connection carries no pings (the user may sit on the code screen for minutes), so
+     * the silence check used by the remote session can't apply. Probe the TV instead, and return to
+     * discovery if it stops answering, e.g. it was switched off while its code was showing.
+     */
+    private fun watchPairingTv(tv: DiscoveredTv) {
+        pairingWatchJob?.cancel()
+        pairingWatchJob = viewModelScope.launch {
+            var misses = 0
+            while ((_uiState.value.mode as? RemoteMode.Pairing)?.tv?.host == tv.host) {
+                delay(LIVENESS_INTERVAL_MS)
+                if (remoteSession.isReachable(tv.host)) {
+                    misses = 0
+                } else if (++misses >= LIVENESS_MAX_MISSES) {
+                    Log.i(TAG, "${tv.displayName} stopped answering during pairing")
+                    remoteSession.close()
+                    repository.removeDiscovered(tv.host)
+                    _uiState.value = _uiState.value.copy(
+                        mode = RemoteMode.Discovery,
+                        isDiscovering = false,
+                        awaitingCode = false,
+                        pairingCode = "",
+                        error = "${tv.displayName} went offline while pairing. Turn it on and try again."
+                    )
+                    return@launch
+                }
+            }
+        }
     }
 
     /** Keeps only hex digits, upper-cased and capped at 6, and clears any shown error. */
@@ -250,6 +393,7 @@ class RemoteViewModel @Inject constructor(
     /** Abandons the connection attempt and returns to discovery. */
     fun cancelPairing() {
         reconnectJob?.cancel()
+        pairingWatchJob?.cancel()
         remoteSession.close()
         _uiState.value = _uiState.value.copy(
             mode = RemoteMode.Discovery,
@@ -352,13 +496,7 @@ class RemoteViewModel @Inject constructor(
         repository.releaseResources()
     }
 
-    fun clearTvCache() {
-        viewModelScope.launch {
-            repository.clearPortCache()
-            _uiState.value = _uiState.value.copy(error = "✅ TV cache cleared!")
-    }
-    }
-    }
+}
 
 /** Something to do to the TV's text field, applied in order by the view model. */
 private sealed interface TextAction {

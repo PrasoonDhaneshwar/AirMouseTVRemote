@@ -12,6 +12,7 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.launch
+import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.Executors
 import javax.inject.Inject
 import javax.inject.Singleton
@@ -28,6 +29,9 @@ private val SERVICE_TYPES = listOf(SERVICE_TYPE_REMOTE, SERVICE_TYPE_CAST)
 interface NsdDiscoveryListener {
     fun onTvDiscovered(tv: DiscoveredTv)
     fun onHttpScanNeeded(tv: DiscoveredTv)
+
+    /** The TV's remote service stopped being advertised; [host] is where it was resolved, if it got that far. */
+    fun onServiceLost(serviceName: String, host: String?)
 }
 
 @Singleton
@@ -39,12 +43,17 @@ class NsdDiscoveryEngine @Inject constructor(
     private val nsdManager = context.getSystemService(Context.NSD_SERVICE) as NsdManager
     private val executor = Executors.newSingleThreadExecutor()
 
-    // Original listener properties (moved from RemoteRepository)
     private val discoveryListeners = mutableListOf<NsdManager.DiscoveryListener>()
     private val serviceInfoCallbacks = mutableListOf<NsdManager.ServiceInfoCallback>()
     private var resolveListener: NsdManager.ResolveListener? = null
 
     private var multicastLock: WifiManager.MulticastLock? = null
+
+    /**
+     * Where each remote service was resolved, by service name. A TV also advertises a cast service under
+     * a different name, so a lost remote service is matched to its TV by host rather than by name.
+     */
+    private val resolvedRemoteHosts = ConcurrentHashMap<String, String>()
 
     // Callback registry (for RemoteRepository)
     private val listeners = mutableSetOf<NsdDiscoveryListener>()
@@ -53,7 +62,7 @@ class NsdDiscoveryEngine @Inject constructor(
         acquireMulticastLock()
     }
 
-    fun startDiscovery() {
+    fun  startDiscovery() {
         if (discoveryListeners.isNotEmpty()) {
             Log.w(TAG_NSD, "⚠️ Discovery already active")
             return
@@ -93,6 +102,7 @@ class NsdDiscoveryEngine @Inject constructor(
         }
         serviceInfoCallbacks.clear()
         resolveListener = null
+        resolvedRemoteHosts.clear()
 
         Log.d(TAG_NSD, "🧹 Discovery fully cleaned")
     }
@@ -104,6 +114,10 @@ class NsdDiscoveryEngine @Inject constructor(
     private fun notifyDiscoveredTv(tv: DiscoveredTv) {
         listeners.forEach { it.onTvDiscovered(tv) }
         Log.d(TAG_NSD, "📡 TV discovered: ${tv.displayName}")
+    }
+
+    private fun rememberRemoteHost(serviceType: String, serviceName: String, host: String) {
+        if (serviceType.contains(SERVICE_TYPE_REMOTE)) resolvedRemoteHosts[serviceName] = host
     }
 
     private fun notifyHttpScanNeeded(tv: DiscoveredTv) {
@@ -131,14 +145,19 @@ class NsdDiscoveryEngine @Inject constructor(
             Log.i(TAG_NSD, "🎉 ANDROID TV DETECTED! Resolving: ${serviceInfo.serviceName}")
 
             if (Build.VERSION.SDK_INT >= 34) {
-                startServiceInfoCallback(serviceInfo)  // YOUR EXACT ORIGINAL LOGIC
+                startServiceInfoCallback(serviceInfo)
             } else {
-                startResolveLegacy(serviceInfo)        // YOUR EXACT ORIGINAL LOGIC
+                startResolveLegacy(serviceInfo)
             }
         }
 
         override fun onServiceLost(serviceInfo: NsdServiceInfo) {
             Log.w(TAG_NSD, "🔌 Service lost: ${serviceInfo.serviceName}")
+            // Only the remote service matters: the cast one can come and go while the remote still works
+            if (browseType == SERVICE_TYPE_REMOTE) {
+                val host = resolvedRemoteHosts.remove(serviceInfo.serviceName)
+                listeners.forEach { it.onServiceLost(serviceInfo.serviceName, host) }
+            }
         }
 
         override fun onStartDiscoveryFailed(serviceType: String, errorCode: Int) {
@@ -150,7 +169,7 @@ class NsdDiscoveryEngine @Inject constructor(
         }
     }
 
-    // ===== API 34+ path ===== (YOUR 100% ORIGINAL LOGIC)
+    // ===== API 34+ path (ServiceInfoCallback) =====
     private fun startServiceInfoCallback(discovered: NsdServiceInfo) {
         if (Build.VERSION.SDK_INT < 34) return
 
@@ -165,6 +184,7 @@ class NsdDiscoveryEngine @Inject constructor(
                 val port = info.port.takeIf { it > 0 } ?: return
 
                 Log.d(TAG_NSD, "📍 Resolved ${info.serviceName} -> $host:$port")
+                rememberRemoteHost(discovered.serviceType, info.serviceName, host)
                 Log.d(TAG_NSD, "📋 TXT Records: ${info.attributes.map {
                     "${it.key}=${it.value?.toString(Charsets.UTF_8)?.take(50)}"
                 }}")
@@ -203,7 +223,7 @@ class NsdDiscoveryEngine @Inject constructor(
         nsdManager.registerServiceInfoCallback(baseInfo, executor, callback)
     }
 
-    // ===== Legacy path (<34) ===== (YOUR 100% ORIGINAL LOGIC)
+    // ===== Legacy path, below API 34 (ResolveListener) =====
     private fun startResolveLegacy(discovered: NsdServiceInfo) {
         if (Build.VERSION.SDK_INT >= 34) return
 
@@ -212,6 +232,7 @@ class NsdDiscoveryEngine @Inject constructor(
                 val host = info.host?.hostAddress ?: return
                 val port = info.port.takeIf { it > 0 } ?: return
                 Log.d(TAG_NSD, "📍 Resolved ${info.serviceName} -> $host:$port")
+                rememberRemoteHost(discovered.serviceType, info.serviceName, host)
 
                 Log.d(TAG_NSD, "📋 TXT Records: ${info.attributes.map {
                     "${it.key}=${it.value?.toString(Charsets.UTF_8)?.take(50)}"
