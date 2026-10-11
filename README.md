@@ -25,13 +25,9 @@
 
 ## 🎬 See it in action
 
-| Find & pair your TV | Navigate |
-|:---:|:---:|
-| <img src="docs/gifs/pairing.gif" width="240" /> | <img src="docs/gifs/remote.gif" width="240" /> |
-
-| Type on the TV | Switch TV |
-|:---:|:---:|
-| <img src="docs/gifs/text-entry.gif" width="240" /> | <img src="docs/gifs/reconnect.gif" width="240" /> |
+| Find & pair | Navigate | Type on the TV | Switch TV |
+|:---:|:---:|:---:|:---:|
+| <img src="docs/gifs/pairing.gif" width="190" /> | <img src="docs/gifs/remote.gif" width="190" /> | <img src="docs/gifs/text-entry.gif" width="190" /> | <img src="docs/gifs/reconnect.gif" width="190" /> |
 
 ## 👇 Get started
 
