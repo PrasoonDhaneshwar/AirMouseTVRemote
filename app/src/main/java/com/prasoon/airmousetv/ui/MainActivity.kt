@@ -1,5 +1,6 @@
 package com.prasoon.airmousetv.ui
 
+import android.content.pm.ActivityInfo
 import android.graphics.Color
 import android.os.Bundle
 import android.util.Log
@@ -29,6 +30,12 @@ class MainActivity : ComponentActivity() {
     @OptIn(ExperimentalMaterial3WindowSizeClassApi::class)
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+
+        // A remote isn't meant to rotate on a phone. Tablets, foldables and Chrome OS (sw >= 600dp) stay
+        // free to rotate, since Android 16 ignores fixed orientations there anyway.
+        if (resources.configuration.smallestScreenWidthDp < 600) {
+            requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_PORTRAIT
+        }
 
         // Edge-to-edge status/navigation bars
         enableEdgeToEdge(

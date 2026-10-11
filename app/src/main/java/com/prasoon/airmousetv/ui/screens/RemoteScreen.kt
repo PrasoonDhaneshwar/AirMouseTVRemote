@@ -1,5 +1,6 @@
 package com.prasoon.airmousetv.ui.screens
 
+import android.content.Context
 import android.widget.Toast
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -67,7 +68,9 @@ import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Shape
+import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.graphics.vector.path
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalContext
@@ -101,10 +104,13 @@ import kotlin.math.sign
 @Composable
 fun RemoteScreen(viewModel: RemoteViewModel) {
     val uiState by viewModel.uiState.collectAsState()
-    var padMode by rememberSaveable { mutableStateOf(PadMode.DPAD) }
+    val context = LocalContext.current
+    val uiPrefs = remember { context.getSharedPreferences("remote_ui", Context.MODE_PRIVATE) }
+    var padMode by rememberSaveable {
+        mutableStateOf(PadMode.entries.firstOrNull { it.name == uiPrefs.getString("pad_mode", null) } ?: PadMode.DPAD)
+    }
     var showTextEntry by remember { mutableStateOf(false) }
     var showYouTubeSearch by remember { mutableStateOf(false) }
-    val context = LocalContext.current
     val clipboard = LocalClipboardManager.current
     // The TV asks for its keyboard by bumping showRequests; open text entry on each new request
     val showRequests = uiState.imeField?.showRequests ?: 0
@@ -117,7 +123,10 @@ fun RemoteScreen(viewModel: RemoteViewModel) {
     RemoteContent(
         uiState = uiState,
         padMode = padMode,
-        onPadModeChange = { padMode = it },
+        onPadModeChange = {
+            padMode = it
+            uiPrefs.edit().putString("pad_mode", it.name).apply()
+        },
         onKey = viewModel::sendKey,
         onShowKeyboard = {
             if (uiState.imeField != null) {
@@ -225,7 +234,7 @@ private fun MediaButtons(onKey: (TvKey, KeyAction) -> Unit, enabled: Boolean) {
         RemoteKey(
             TvKey.PLAY_PAUSE, onKey, enabled, Modifier.size(width = 96.dp, height = 48.dp), CircleShape,
             MaterialTheme.colorScheme.surfaceContainerHigh
-        ) { KeyIcon(Icons.Default.PlayArrow, "Play or pause") }
+        ) { KeyIcon(rememberPlayPauseIcon(), "Play/Pause") }
         RemoteKey(TvKey.NEXT, onKey, enabled, Modifier.size(48.dp), CircleShape, Color.Transparent) {
             KeyIcon(Icons.Default.SkipNext, "Next")
         }
@@ -324,6 +333,18 @@ private fun LabeledKey(
             textAlign = TextAlign.Center
         )
     }
+}
+
+/** A play triangle followed by pause bars: the TV doesn't report playback state, so the icon claims neither. */
+@Composable
+private fun rememberPlayPauseIcon(): ImageVector = remember {
+    ImageVector.Builder("PlayPause", 24.dp, 24.dp, 24f, 24f).apply {
+        path(fill = SolidColor(Color.Black)) {
+            moveTo(2f, 6f); lineTo(2f, 18f); lineTo(11f, 12f); close()
+            moveTo(14f, 6f); lineTo(17f, 6f); lineTo(17f, 18f); lineTo(14f, 18f); close()
+            moveTo(19f, 6f); lineTo(22f, 6f); lineTo(22f, 18f); lineTo(19f, 18f); close()
+        }
+    }.build()
 }
 
 @Composable
