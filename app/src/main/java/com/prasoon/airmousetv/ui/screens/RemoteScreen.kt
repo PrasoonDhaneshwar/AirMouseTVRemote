@@ -1,5 +1,6 @@
 package com.prasoon.airmousetv.ui.screens
 
+import android.widget.Toast
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectDragGestures
@@ -63,11 +64,14 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Shape
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.platform.LocalClipboardManager
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.role
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
@@ -327,6 +331,8 @@ private fun TextEntryDialog(viewModel: RemoteViewModel, onDismiss: () -> Unit) {
     val field = uiState.imeField
     var text by remember { mutableStateOf(field?.value.orEmpty()) }
     val focusRequester = remember { FocusRequester() }
+    val clipboard = LocalClipboardManager.current
+    val context = LocalContext.current
 
     // Wait for the field to be laid out before asking for focus, or there is nothing to focus yet
     LaunchedEffect(Unit) {
@@ -335,30 +341,75 @@ private fun TextEntryDialog(viewModel: RemoteViewModel, onDismiss: () -> Unit) {
         focusRequester.requestFocus()
     }
 
+    TextEntryDialogContent(
+        title = field?.label?.takeIf { it.isNotBlank() } ?: "Type on TV",
+        text = text,
+        onTextChange = {
+            text = it
+            viewModel.typeText(it)
+        },
+        acceptsText = field?.acceptsText == true,
+        textInputOffered = uiState.textInputOffered,
+        focusRequester = focusRequester,
+        onCopyDiagnostics = {
+            clipboard.setText(AnnotatedString(viewModel.diagnosticsReport()))
+            Toast.makeText(context, "Diagnostics copied", Toast.LENGTH_SHORT).show()
+        },
+        onEnter = {
+            viewModel.submitText()
+            onDismiss()
+        },
+        onDismiss = onDismiss
+    )
+}
+
+/**
+ * The dialog itself. Without a text input session on the TV it explains why typing may not show
+ * up: [textInputOffered] false means the TV never offered text input at all.
+ */
+@Composable
+private fun TextEntryDialogContent(
+    title: String,
+    text: String,
+    onTextChange: (String) -> Unit,
+    acceptsText: Boolean,
+    textInputOffered: Boolean?,
+    focusRequester: FocusRequester,
+    onCopyDiagnostics: () -> Unit,
+    onEnter: () -> Unit,
+    onDismiss: () -> Unit,
+) {
     AlertDialog(
         onDismissRequest = onDismiss,
-        title = { Text(field?.label?.takeIf { it.isNotBlank() } ?: "Type on TV") },
+        title = { Text(title) },
         text = {
-            OutlinedTextField(
-                value = text,
-                onValueChange = {
-                    text = it
-                    viewModel.typeText(it)
-                },
-                modifier = Modifier.fillMaxWidth().focusRequester(focusRequester),
-                keyboardOptions = KeyboardOptions(imeAction = ImeAction.Send),
-                keyboardActions = KeyboardActions(onSend = {
-                    viewModel.submitText()
-                    onDismiss()
-                })
-            )
+            Column {
+                OutlinedTextField(
+                    value = text,
+                    onValueChange = onTextChange,
+                    modifier = Modifier.fillMaxWidth().focusRequester(focusRequester),
+                    keyboardOptions = KeyboardOptions(imeAction = ImeAction.Send),
+                    keyboardActions = KeyboardActions(onSend = { onEnter() })
+                )
+                if (!acceptsText) {
+                    val hint = if (textInputOffered == false) {
+                        "This TV doesn't support typing from a phone. Use the TV's on-screen keyboard with the D-pad."
+                    } else {
+                        "No text input session with the TV, so letters are sent as key presses. Select the " +
+                            "text box on the TV first. If nothing appears, this TV or app ignores them: use the " +
+                            "TV's on-screen keyboard with the D-pad."
+                    }
+                    Text(
+                        hint,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.padding(top = 8.dp)
+                    )
+                    TextButton(onClick = onCopyDiagnostics) { Text("Copy diagnostics") }
+                }
+            }
         },
-        confirmButton = {
-            TextButton(onClick = {
-                viewModel.submitText()
-                onDismiss()
-            }) { Text("Enter") }
-        },
+        confirmButton = { TextButton(onClick = onEnter) { Text("Enter") } },
         dismissButton = { TextButton(onClick = onDismiss) { Text("Close") } }
     )
 }
@@ -546,5 +597,29 @@ private fun RemoteReconnectingPreview() {
             RemoteUiState(mode = previewMode, isReconnecting = true, error = "Connection lost"),
             PadMode.DPAD, {}, { _, _ -> }, {}, {}
         )
+    }
+}
+
+@Preview(showBackground = true, widthDp = 390, heightDp = 600, name = "Typing: TV offers no text input")
+@Composable
+private fun TextEntryNotOfferedPreview() {
+    AirMouseTVRemoteTheme {
+        TextEntryDialogContent("Type on TV", "hello", {}, acceptsText = false, textInputOffered = false, FocusRequester(), {}, {}, {})
+    }
+}
+
+@Preview(showBackground = true, widthDp = 390, heightDp = 600, name = "Typing: key-press fallback")
+@Composable
+private fun TextEntryKeyFallbackPreview() {
+    AirMouseTVRemoteTheme {
+        TextEntryDialogContent("Search", "hello", {}, acceptsText = false, textInputOffered = true, FocusRequester(), {}, {}, {})
+    }
+}
+
+@Preview(showBackground = true, widthDp = 390, heightDp = 600, name = "Typing: text session open")
+@Composable
+private fun TextEntrySessionPreview() {
+    AirMouseTVRemoteTheme {
+        TextEntryDialogContent("Search", "hello", {}, acceptsText = true, textInputOffered = true, FocusRequester(), {}, {}, {})
     }
 }

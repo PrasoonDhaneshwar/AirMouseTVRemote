@@ -70,6 +70,8 @@ private const val TRUSTED_CHECK_TIMEOUT_MS = 3000L
 private const val CONNECT_TIMEOUT_MS = 4000
 /** No bytes from the TV for this long on the remote connection means it is gone; it normally pings every ~5 s. */
 private const val REMOTE_READ_TIMEOUT_MS = 15_000
+/** How many recent events [RemoteSessionManager.diagnosticsReport] keeps. */
+private const val MAX_DIAGNOSTIC_LINES = 60
 /** Shorter timeout for the pre-connect reachability probe, so an off TV is reported quickly. */
 private const val REACHABILITY_TIMEOUT_MS = 1500
 
@@ -117,6 +119,24 @@ class RemoteSessionManager(private val context: Context) {
     private val _imeField = MutableStateFlow<ImeField?>(null)
     /** The text field focused on the TV, if it has reported one this session. */
     val imeField: StateFlow<ImeField?> = _imeField
+
+    /** Backing flow for [textInputOffered]. */
+    private val _textInputOffered = MutableStateFlow<Boolean?>(null)
+    /** Whether the TV offered text input in this session's handshake; null until it has. */
+    val textInputOffered: StateFlow<Boolean?> = _textInputOffered
+
+    private val diagnostics = ArrayDeque<String>()
+
+    /** Remembers [event] (most recent [MAX_DIAGNOSTIC_LINES]) so a user without adb can share what the TV did. */
+    @Synchronized
+    fun note(event: String) {
+        if (diagnostics.size >= MAX_DIAGNOSTIC_LINES) diagnostics.removeFirst()
+        diagnostics.addLast("%tT %s".format(System.currentTimeMillis(), event))
+    }
+
+    /** Recent handshake and text-input events, as plain text to paste into a bug report. */
+    @Synchronized
+    fun diagnosticsReport(): String = diagnostics.joinToString("")
 
     /** Features agreed with the TV in the current remote session. */
     private var activeFeatures = SUPPORTED_FEATURES
@@ -532,7 +552,11 @@ class RemoteSessionManager(private val context: Context) {
             message.hasRemoteConfigure() -> {
                 val offered = message.remoteConfigure.code1
                 activeFeatures = offered and SUPPORTED_FEATURES
-                Log.d(TAG, "RemoteConfigure from TV: ${message.remoteConfigure.deviceInfo.model} offers $offered, using $activeFeatures")
+                val info = message.remoteConfigure.deviceInfo
+                val textOffered = activeFeatures and 4 != 0
+                _textInputOffered.value = textOffered
+                Log.d(TAG, "RemoteConfigure from TV: ${info.model} offers $offered, using $activeFeatures")
+                note("TV ${info.vendor} ${info.model}, remote service ${info.appVersion}; offers $offered, using $activeFeatures, text input ${if (textOffered) "offered" else "NOT offered"}")
                 send(RemoteMessageEncoder.encodeConfigure(activeFeatures), conn)
             }
             message.hasRemoteSetActive() -> {
@@ -543,15 +567,18 @@ class RemoteSessionManager(private val context: Context) {
             message.hasRemoteImeKeyInject() -> message.remoteImeKeyInject.let {
                 // Sent when the foreground app changes (no field) and when a text field takes focus
                 Log.d(TAG, "ImeKeyInject: app=${it.appInfo.appPackage} hasField=${it.hasTextFieldStatus()}")
+                note("ImeKeyInject app=${it.appInfo.appPackage} textField=${it.hasTextFieldStatus()}")
                 if (it.hasTextFieldStatus()) updateIme(it.textFieldStatus, focused = true)
             }
             message.hasRemoteImeShowRequest() -> message.remoteImeShowRequest.let {
                 // Also sent after every edit we make, with the field's full text, so it isn't a focus signal
                 Log.d(TAG, "ImeShowRequest: field=${it.remoteTextFieldStatus.counterField}")
+                note("ImeShowRequest value=\"${it.remoteTextFieldStatus.value}\"")
                 updateIme(it.remoteTextFieldStatus, focused = false)
             }
             message.hasRemoteImeBatchEdit() -> message.remoteImeBatchEdit.let { edit ->
                 Log.d(TAG, "ImeBatchEdit from TV: ime=${edit.imeCounter} field=${edit.fieldCounter}")
+                note("ImeBatchEdit ime=${edit.imeCounter}")
                 // Observed: ime=1 when a text field is activated on the TV, ime=0 when it is closed
                 _imeField.update { old ->
                     (old ?: ImeField()).copy(
@@ -590,6 +617,7 @@ class RemoteSessionManager(private val context: Context) {
     suspend fun sendText(text: String): Boolean {
         if (!hasTextSession) return false
         Log.d(TAG, "sendText len=${text.length}")
+        note("sent text edit (${text.length} chars)")
         send(KeyPayloadFactory.textEdit(text))
         return true
     }

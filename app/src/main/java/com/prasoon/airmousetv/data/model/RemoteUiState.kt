@@ -29,4 +29,6 @@ data class RemoteUiState(
     val isReconnecting: Boolean = false,
     /** The text field focused on the TV, or null if it has not reported one. */
     val imeField: ImeField? = null,
+    /** Whether the TV offered text input in its handshake; null until known. */
+    val textInputOffered: Boolean? = null,
 )

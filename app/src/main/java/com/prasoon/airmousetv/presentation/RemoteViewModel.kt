@@ -80,6 +80,11 @@ class RemoteViewModel @Inject constructor(
 
     private fun observeImeField() {
         viewModelScope.launch {
+            repository.textInputOffered.collect { offered ->
+                _uiState.value = _uiState.value.copy(textInputOffered = offered)
+            }
+        }
+        viewModelScope.launch {
             remoteSession.imeField.collect { field ->
                 _uiState.value = _uiState.value.copy(imeField = field)
             }
@@ -419,6 +424,9 @@ class RemoteViewModel @Inject constructor(
         )
         remoteSession.close()
     }
+
+    /** Recent handshake and text-input events, for the user to copy into a bug report. */
+    fun diagnosticsReport(): String = repository.diagnosticsReport()
 
     /** Starts a text entry session whose field already shows [initial] on the TV. */
     fun beginTextEntry(initial: String) {

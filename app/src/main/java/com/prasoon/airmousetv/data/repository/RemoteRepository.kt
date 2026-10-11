@@ -29,6 +29,8 @@ private const val TAG = "RemoteRepository"
  * edits closer together are applied unpredictably (the word is often appended instead).
  */
 private const val EDIT_GAP_MS = 450L
+/** Pause between typed key presses when there is no text session, so a slow TV doesn't drop or reorder them. */
+private const val KEY_GAP_MS = 30L
 
 /**
  * Single entry point for the data layer: TV discovery (NSD, with an HTTP name lookup fallback)
@@ -153,6 +155,12 @@ class RemoteRepository @Inject constructor(
         session.send(KeyPayloadFactory.keyPress(key, action))
     }
 
+    /** Whether the TV offered text input in its handshake; null until known. */
+    val textInputOffered get() = session.textInputOffered
+
+    /** Recent handshake and text-input events, for sharing in a bug report. */
+    fun diagnosticsReport() = session.diagnosticsReport()
+
     /** Serialises typing so edits made in quick succession reach the TV in order. */
     private val typingLock = Mutex()
 
@@ -171,7 +179,7 @@ class RemoteRepository @Inject constructor(
      *
      * With a text input session open the edit goes through it (see [typeAsText]). Otherwise the
      * difference is typed as key presses: backspaces over what changed at the end, then the new
-     * characters. Returns the characters that couldn't be typed as key presses and were skipped.
+     * characters, paced by [KEY_GAP_MS] so slow or older TVs don't drop keys. Returns the characters that couldn't be typed as key presses and were skipped.
      */
     suspend fun typeEdit(previous: String, current: String): List<Char> =
         typingLock.withLock {
@@ -181,8 +189,10 @@ class RemoteRepository @Inject constructor(
             }
 
             val common = previous.commonPrefixWith(current).length
+            session.note("no text session: typing ${current.length - common} chars as key presses")
             repeat(previous.length - common) {
                 session.send(KeyPayloadFactory.keyCode(RemoteKeyCode.KEYCODE_DEL))
+                delay(KEY_GAP_MS)
             }
 
             val skipped = mutableListOf<Char>()
@@ -195,6 +205,7 @@ class RemoteRepository @Inject constructor(
                 if (stroke.shift) session.send(KeyPayloadFactory.keyCode(RemoteKeyCode.KEYCODE_SHIFT_LEFT, KeyAction.LONG_START))
                 session.send(KeyPayloadFactory.keyCode(stroke.code))
                 if (stroke.shift) session.send(KeyPayloadFactory.keyCode(RemoteKeyCode.KEYCODE_SHIFT_LEFT, KeyAction.LONG_END))
+                delay(KEY_GAP_MS)
             }
             skipped
         }
