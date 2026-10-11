@@ -63,6 +63,7 @@ private const val REMOTE_PORT = 6466
  * Features we can use, as a bitmask: PING 1, KEY 2, IME 4, POWER 32, VOLUME 64, APP_LINK 512.
  * The session activates only those the TV also offers (voice is deliberately left out).
  */
+private const val APP_LINK_FEATURE = 512
 private const val SUPPORTED_FEATURES = 1 or 2 or 4 or 32 or 64 or 512
 /** How long to wait for an already-paired TV to activate the session before pairing instead. */
 private const val TRUSTED_CHECK_TIMEOUT_MS = 3000L
@@ -72,6 +73,8 @@ private const val CONNECT_TIMEOUT_MS = 4000
 private const val REMOTE_READ_TIMEOUT_MS = 15_000
 /** How many recent events [RemoteSessionManager.diagnosticsReport] keeps. */
 private const val MAX_DIAGNOSTIC_LINES = 60
+/** Silence allowed on a remote connection whose TV hasn't pinged yet, so quiet sticks aren't dropped while idle. */
+private const val UNPINGED_READ_TIMEOUT_MS = 90_000
 /** Shorter timeout for the pre-connect reachability probe, so an off TV is reported quickly. */
 private const val REACHABILITY_TIMEOUT_MS = 1500
 
@@ -137,6 +140,9 @@ class RemoteSessionManager(private val context: Context) {
     /** Recent handshake and text-input events, as plain text to paste into a bug report. */
     @Synchronized
     fun diagnosticsReport(): String = diagnostics.joinToString("")
+
+    /** True once the TV has pinged in this remote session, which tells us it keeps the line busy while idle. */
+    @Volatile private var pingSeen = false
 
     /** Features agreed with the TV in the current remote session. */
     private var activeFeatures = SUPPORTED_FEATURES
@@ -260,9 +266,12 @@ class RemoteSessionManager(private val context: Context) {
     private suspend fun openRemoteConn(host: String): Conn {
         val conn = openTlsSocket(host, REMOTE_PORT)
         // A TV switched off abruptly never closes the socket, so a blocking read would wait for hours.
-        // It pings every few seconds, so silence for this long means it is gone: the read throws and
-        // the session reports Disconnected, which starts the reconnect.
-        conn.socket.soTimeout = REMOTE_READ_TIMEOUT_MS
+        // Most TVs ping every few seconds, so once one has pinged, silence for REMOTE_READ_TIMEOUT_MS
+        // means it is gone: the read throws and the session reports Disconnected, which starts the
+        // reconnect. Until a first ping, wait longer: some sticks stay quiet when idle, and cutting
+        // them off after 15 s made the session reconnect over and over.
+        pingSeen = false
+        conn.socket.soTimeout = UNPINGED_READ_TIMEOUT_MS
         remoteConn = conn
         startReaderLoop(conn, ::handleRemoteFrame)
         return conn
@@ -409,9 +418,10 @@ class RemoteSessionManager(private val context: Context) {
     /** Cleans up after an unexpected read failure and reports it: Disconnected for the remote, Error while pairing. */
     private fun onConnectionLost(conn: Conn, e: Exception) {
         if (e is java.net.SocketTimeoutException) {
-            Log.w(TAG, "No data from the TV for ${REMOTE_READ_TIMEOUT_MS / 1000}s, treating it as gone")
+            Log.w(TAG, "No data from the TV for ${(if (pingSeen) REMOTE_READ_TIMEOUT_MS else UNPINGED_READ_TIMEOUT_MS) / 1000}s, treating it as gone")
         }
         Log.e(TAG, "Connection lost in phase $phase", e)
+        note("connection lost in phase $phase: ${e.javaClass.simpleName} ${e.message}")
         closeConn(conn)
         if (conn === remoteConn) {
             remoteConn = null
@@ -547,8 +557,14 @@ class RemoteSessionManager(private val context: Context) {
         }
 
         when {
-            message.hasRemotePingRequest() ->
+            message.hasRemotePingRequest() -> {
+                if (!pingSeen) {
+                    pingSeen = true
+                    conn.socket.soTimeout = REMOTE_READ_TIMEOUT_MS
+                    note("TV pings, using ${REMOTE_READ_TIMEOUT_MS / 1000}s silence timeout")
+                }
                 send(RemoteMessageEncoder.encodePingResponse(message.remotePingRequest.val1), conn)
+            }
             message.hasRemoteConfigure() -> {
                 val offered = message.remoteConfigure.code1
                 activeFeatures = offered and SUPPORTED_FEATURES
@@ -569,6 +585,7 @@ class RemoteSessionManager(private val context: Context) {
                 Log.d(TAG, "ImeKeyInject: app=${it.appInfo.appPackage} hasField=${it.hasTextFieldStatus()}")
                 note("ImeKeyInject app=${it.appInfo.appPackage} textField=${it.hasTextFieldStatus()}")
                 if (it.hasTextFieldStatus()) updateIme(it.textFieldStatus, focused = true)
+                else _imeField.value = null // the app changed or its text field closed
             }
             message.hasRemoteImeShowRequest() -> message.remoteImeShowRequest.let {
                 // Also sent after every edit we make, with the field's full text, so it isn't a focus signal
@@ -619,6 +636,17 @@ class RemoteSessionManager(private val context: Context) {
         Log.d(TAG, "sendText len=${text.length}")
         note("sent text edit (${text.length} chars)")
         send(KeyPayloadFactory.textEdit(text))
+        return true
+    }
+
+    /**
+     * Opens [link] on the TV, e.g. a search results page in the YouTube app. Returns false,
+     * sending nothing, if the TV didn't offer app links in this session.
+     */
+    suspend fun launchLink(link: String): Boolean {
+        if (activeFeatures and APP_LINK_FEATURE == 0) return false
+        note("opening link on TV: $link")
+        send(KeyPayloadFactory.appLink(link))
         return true
     }
 

@@ -161,6 +161,16 @@ class RemoteRepository @Inject constructor(
     /** Recent handshake and text-input events, for sharing in a bug report. */
     fun diagnosticsReport() = session.diagnosticsReport()
 
+    /**
+     * Opens YouTube's search results for [query] on the TV, for TVs where typing into its own
+     * keyboard isn't possible. Returns false if the TV can't open links.
+     */
+    suspend fun searchYouTube(query: String): Boolean =
+        // vnd.youtube:// is claimed only by YouTube apps. YouTube shows a "+" literally, so spaces must be %20.
+        session.launchLink(
+            "vnd.youtube://results?search_query=" + java.net.URLEncoder.encode(query, "UTF-8").replace("+", "%20")
+        )
+
     /** Serialises typing so edits made in quick succession reach the TV in order. */
     private val typingLock = Mutex()
 

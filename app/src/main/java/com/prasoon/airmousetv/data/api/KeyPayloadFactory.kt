@@ -16,6 +16,10 @@ object KeyPayloadFactory {
     fun keyCode(code: RemoteKeyCode, action: KeyAction = KeyAction.TAP): ByteArray =
         RemoteMessageEncoder.encodeKeyCode(code, action)
 
+    /** Opens [link] on the TV, in whichever app handles it. */
+    fun appLink(link: String): ByteArray =
+        RemoteMessageEncoder.encodeAppLink(link)
+
     /** Text edit: [text] replaces the word at the cursor of the TV's focused text field. */
     fun textEdit(text: String): ByteArray =
         RemoteMessageEncoder.encodeTextEdit(text)

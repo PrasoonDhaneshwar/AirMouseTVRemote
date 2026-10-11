@@ -438,6 +438,20 @@ class RemoteViewModel @Inject constructor(
         textActions.trySend(TextAction.Set(text))
     }
 
+    /** Opens YouTube search results for [query] on the TV; failures are surfaced through [RemoteUiState.error]. */
+    fun searchYouTube(query: String) {
+        viewModelScope.launch {
+            try {
+                if (!repository.searchYouTube(query)) {
+                    _uiState.value = _uiState.value.copy(error = "This TV can't open links")
+                }
+            } catch (e: Exception) {
+                Log.e(TAG, "searchYouTube failed", e)
+                _uiState.value = _uiState.value.copy(error = "Send failed: ${e.message}")
+            }
+        }
+    }
+
     /** Presses Enter on the TV once all text typed so far has been sent. */
     fun submitText() {
         textActions.trySend(TextAction.Enter)

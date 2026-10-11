@@ -6,6 +6,7 @@ import com.prasoon.airmousetv.proto.polo.PairingRequest
 import com.prasoon.airmousetv.proto.polo.Options
 import com.prasoon.airmousetv.proto.polo.Configuration
 import com.prasoon.airmousetv.proto.polo.Secret
+import com.prasoon.airmousetv.proto.remote.RemoteAppLinkLaunchRequest
 import com.prasoon.airmousetv.proto.remote.RemoteMessage
 import com.prasoon.airmousetv.proto.remote.RemoteConfigure
 import com.prasoon.airmousetv.proto.remote.RemoteDeviceInfo
@@ -169,6 +170,13 @@ object RemoteMessageEncoder {
             .build()
             .toByteArray()
     }
+
+    /** Asks the TV to open [link], the way an Android intent would: an https link opens in the app that handles it. */
+    fun encodeAppLink(link: String): ByteArray =
+        RemoteMessage.newBuilder()
+            .setRemoteAppLinkLaunchRequest(RemoteAppLinkLaunchRequest.newBuilder().setAppLink(link))
+            .build()
+            .toByteArray()
 
     /** Answers a keep-alive ping; [val1] must echo the value the TV sent. */
     fun encodePingResponse(val1: Int): ByteArray {

@@ -362,6 +362,7 @@ private fun TextEntryDialog(viewModel: RemoteViewModel, onDismiss: () -> Unit) {
             viewModel.typeText(it)
         },
         acceptsText = field?.acceptsText == true,
+        tvHasTextField = field != null,
         textInputOffered = uiState.textInputOffered,
         focusRequester = focusRequester,
         onCopyDiagnostics = {
@@ -372,7 +373,11 @@ private fun TextEntryDialog(viewModel: RemoteViewModel, onDismiss: () -> Unit) {
             viewModel.submitText()
             onDismiss()
         },
-        onDismiss = onDismiss
+        onDismiss = onDismiss,
+        onSearchYouTube = {
+            viewModel.searchYouTube(text)
+            onDismiss()
+        }
     )
 }
 
@@ -386,11 +391,13 @@ private fun TextEntryDialogContent(
     text: String,
     onTextChange: (String) -> Unit,
     acceptsText: Boolean,
+    tvHasTextField: Boolean,
     textInputOffered: Boolean?,
     focusRequester: FocusRequester,
     onCopyDiagnostics: () -> Unit,
     onEnter: () -> Unit,
     onDismiss: () -> Unit,
+    onSearchYouTube: (() -> Unit)? = null,
 ) {
     AlertDialog(
         onDismissRequest = onDismiss,
@@ -407,6 +414,10 @@ private fun TextEntryDialogContent(
                 if (!acceptsText) {
                     val hint = if (textInputOffered == false) {
                         "This TV doesn't support typing from a phone. Use the TV's on-screen keyboard with the D-pad."
+                    } else if (!tvHasTextField) {
+                        "The TV isn't reporting a text box right now. Open a search or text box on the TV " +
+                            "first. Some apps, like Netflix, don't share theirs with remote apps: use the TV's " +
+                            "on-screen keyboard with the D-pad."
                     } else {
                         "No text input session with the TV, so letters are sent as key presses. Select the " +
                             "text box on the TV first. If nothing appears, this TV or app ignores them: use the " +
@@ -418,6 +429,9 @@ private fun TextEntryDialogContent(
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                         modifier = Modifier.padding(top = 8.dp)
                     )
+                    if (onSearchYouTube != null && text.isNotBlank()) {
+                        TextButton(onClick = onSearchYouTube) { Text("Search YouTube on TV") }
+                    }
                     TextButton(onClick = onCopyDiagnostics) { Text("Copy diagnostics") }
                 }
             }
@@ -617,7 +631,7 @@ private fun RemoteReconnectingPreview() {
 @Composable
 private fun TextEntryNotOfferedPreview() {
     AirMouseTVRemoteTheme {
-        TextEntryDialogContent("Type on TV", "hello", {}, acceptsText = false, textInputOffered = false, FocusRequester(), {}, {}, {})
+        TextEntryDialogContent("Type on TV", "hello", {}, acceptsText = false, tvHasTextField = false, textInputOffered = false, FocusRequester(), {}, {}, {})
     }
 }
 
@@ -625,7 +639,7 @@ private fun TextEntryNotOfferedPreview() {
 @Composable
 private fun TextEntryKeyFallbackPreview() {
     AirMouseTVRemoteTheme {
-        TextEntryDialogContent("Search", "hello", {}, acceptsText = false, textInputOffered = true, FocusRequester(), {}, {}, {})
+        TextEntryDialogContent("Search", "hello", {}, acceptsText = false, tvHasTextField = true, textInputOffered = true, FocusRequester(), {}, {}, {})
     }
 }
 
@@ -633,6 +647,14 @@ private fun TextEntryKeyFallbackPreview() {
 @Composable
 private fun TextEntrySessionPreview() {
     AirMouseTVRemoteTheme {
-        TextEntryDialogContent("Search", "hello", {}, acceptsText = true, textInputOffered = true, FocusRequester(), {}, {}, {})
+        TextEntryDialogContent("Search", "hello", {}, acceptsText = true, tvHasTextField = true, textInputOffered = true, FocusRequester(), {}, {}, {})
+    }
+}
+
+@Preview(showBackground = true, widthDp = 390, heightDp = 600, name = "Typing: TV reports no text box")
+@Composable
+private fun TextEntryNoFieldPreview() {
+    AirMouseTVRemoteTheme {
+        TextEntryDialogContent("Type on TV", "hello", {}, acceptsText = false, tvHasTextField = false, textInputOffered = true, FocusRequester(), {}, {}, {}, onSearchYouTube = {})
     }
 }
