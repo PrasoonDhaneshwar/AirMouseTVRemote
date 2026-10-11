@@ -144,9 +144,22 @@ private fun Header(tvName: String, reconnecting: Boolean, enabled: Boolean, onKe
     }
 }
 
-/** Previous / play-pause / next in a rounded pill. */
+/** Previous / play-pause / next in a rounded pill, with a note for apps that ignore them. */
 @Composable
 private fun MediaPill(onKey: (TvKey, KeyAction) -> Unit, enabled: Boolean) {
+    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+        MediaButtons(onKey, enabled)
+        Text(
+            "Some apps, like Netflix, ignore these buttons. Try OK to pause.",
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.padding(top = 6.dp)
+        )
+    }
+}
+
+@Composable
+private fun MediaButtons(onKey: (TvKey, KeyAction) -> Unit, enabled: Boolean) {
     Row(
         modifier = Modifier
             .fillMaxWidth()
