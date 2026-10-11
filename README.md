@@ -9,7 +9,7 @@
 ![Jetpack Compose](https://img.shields.io/badge/UI-Jetpack%20Compose-4285F4?logo=jetpackcompose&logoColor=white)
 ![Hilt](https://img.shields.io/badge/DI-Hilt-2C8EBB)
 
-[**⬇️ Download the APK**](https://github.com/PrasoonDhaneshwar/AirMouseTVRemote/releases/latest)
+[**⬇️ Download the APK**](https://github.com/PrasoonDhaneshwar/AirMouseTVRemote/releases/download/1.0/AirMouseTVRemote-v1.0.apk)
 
 </div>
 
@@ -23,20 +23,20 @@
 - **Type on the TV.** When a TV search box asks for text, the phone keyboard opens and types straight into it.
 - **Honest connection state.** The UI reflects whether the TV is really reachable, and reconnects when the network comes back.
 
-## 📸 Screenshots
+## 🎬 See it in action
 
-<div>
-  <img src="docs/screenshots/discovery.png" width="266" />
-  <img src="docs/screenshots/pairing.png" width="266" />
-  <img src="docs/screenshots/remote.png" width="266" />
-  <img src="docs/screenshots/touchpad.png" width="266" />
-  <img src="docs/screenshots/text-entry.png" width="266" />
-</div>
+| Find & pair your TV | Navigate |
+|:---:|:---:|
+| <img src="docs/gifs/pairing.gif" width="240" /> | <img src="docs/gifs/remote.gif" width="240" /> |
+
+| Type on the TV | Switch TV |
+|:---:|:---:|
+| <img src="docs/gifs/text-entry.gif" width="240" /> | <img src="docs/gifs/reconnect.gif" width="240" /> |
 
 ## 👇 Get started
 
 1. Put your phone and TV on the **same Wi-Fi network**.
-2. [Download the APK](https://github.com/PrasoonDhaneshwar/AirMouseTVRemote/releases/latest) and install it.
+2. [Download the APK](https://github.com/PrasoonDhaneshwar/AirMouseTVRemote/releases/download/1.0/AirMouseTVRemote-v1.0.apk) and install it.
 3. Open the app and pick your TV from the list.
 4. Type the code shown on the TV screen.
 5. Start navigating.

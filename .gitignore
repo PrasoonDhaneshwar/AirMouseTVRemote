@@ -16,3 +16,7 @@ local.properties
 
 .kotlin/
 /.idea/deviceManager.xml
+
+# Release APKs and raw demo recordings
+*.apk
+docs/*.mp4
