@@ -69,8 +69,8 @@ private const val SUPPORTED_FEATURES = 1 or 2 or 4 or 32 or 64 or 512
 private const val TRUSTED_CHECK_TIMEOUT_MS = 3000L
 /** TCP connect timeout; a TV on the same LAN answers (or refuses) well within this. */
 private const val CONNECT_TIMEOUT_MS = 4000
-/** No bytes from the TV for this long on the remote connection means it is gone; it normally pings every ~5 s. */
-private const val REMOTE_READ_TIMEOUT_MS = 15_000
+/** No bytes from the TV for this long on the remote connection means it is gone; most TVs ping every ~5 s, but a waipu stick went quiet for over 15 s. */
+private const val REMOTE_READ_TIMEOUT_MS = 40_000
 /** How many recent events [RemoteSessionManager.diagnosticsReport] keeps. */
 private const val MAX_DIAGNOSTIC_LINES = 60
 /** Silence allowed on a remote connection whose TV hasn't pinged yet, so quiet sticks aren't dropped while idle. */
@@ -123,10 +123,10 @@ class RemoteSessionManager(private val context: Context) {
     /** The text field focused on the TV, if it has reported one this session. */
     val imeField: StateFlow<ImeField?> = _imeField
 
-    /** Backing flow for [textInputOffered]. */
-    private val _textInputOffered = MutableStateFlow<Boolean?>(null)
-    /** Whether the TV offered text input in this session's handshake; null until it has. */
-    val textInputOffered: StateFlow<Boolean?> = _textInputOffered
+    /** Backing flow for [foregroundApp]. */
+    private val _foregroundApp = MutableStateFlow<String?>(null)
+    /** Package of the app in front on the TV, as last reported by it; null until it has reported one. */
+    val foregroundApp: StateFlow<String?> = _foregroundApp
 
     private val diagnostics = ArrayDeque<String>()
 
@@ -570,7 +570,6 @@ class RemoteSessionManager(private val context: Context) {
                 activeFeatures = offered and SUPPORTED_FEATURES
                 val info = message.remoteConfigure.deviceInfo
                 val textOffered = activeFeatures and 4 != 0
-                _textInputOffered.value = textOffered
                 Log.d(TAG, "RemoteConfigure from TV: ${info.model} offers $offered, using $activeFeatures")
                 note("TV ${info.vendor} ${info.model}, remote service ${info.appVersion}; offers $offered, using $activeFeatures, text input ${if (textOffered) "offered" else "NOT offered"}")
                 send(RemoteMessageEncoder.encodeConfigure(activeFeatures), conn)
@@ -583,6 +582,7 @@ class RemoteSessionManager(private val context: Context) {
             message.hasRemoteImeKeyInject() -> message.remoteImeKeyInject.let {
                 // Sent when the foreground app changes (no field) and when a text field takes focus
                 Log.d(TAG, "ImeKeyInject: app=${it.appInfo.appPackage} hasField=${it.hasTextFieldStatus()}")
+                _foregroundApp.value = it.appInfo.appPackage
                 note("ImeKeyInject app=${it.appInfo.appPackage} textField=${it.hasTextFieldStatus()}")
                 if (it.hasTextFieldStatus()) updateIme(it.textFieldStatus, focused = true)
                 else _imeField.value = null // the app changed or its text field closed
@@ -640,8 +640,8 @@ class RemoteSessionManager(private val context: Context) {
     }
 
     /**
-     * Opens [link] on the TV, e.g. a search results page in the YouTube app. Returns false,
-     * sending nothing, if the TV didn't offer app links in this session.
+     * Opens [link] on the TV. Returns false, sending nothing, if the TV didn't offer app links in
+     * this session.
      */
     suspend fun launchLink(link: String): Boolean {
         if (activeFeatures and APP_LINK_FEATURE == 0) return false
@@ -693,6 +693,7 @@ class RemoteSessionManager(private val context: Context) {
         remoteConn = null
         phase = Phase.IDLE
         _imeField.value = null
+        _foregroundApp.value = null
         _connectionState.value = ConnectionState.Disconnected
     }
 }

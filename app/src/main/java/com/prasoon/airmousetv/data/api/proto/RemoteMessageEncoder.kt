@@ -171,7 +171,7 @@ object RemoteMessageEncoder {
             .toByteArray()
     }
 
-    /** Asks the TV to open [link], the way an Android intent would: an https link opens in the app that handles it. */
+    /** Asks the TV to open [link], the way an Android intent would. */
     fun encodeAppLink(link: String): ByteArray =
         RemoteMessage.newBuilder()
             .setRemoteAppLinkLaunchRequest(RemoteAppLinkLaunchRequest.newBuilder().setAppLink(link))

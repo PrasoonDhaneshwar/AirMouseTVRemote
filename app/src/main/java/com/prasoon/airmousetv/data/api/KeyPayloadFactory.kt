@@ -16,7 +16,7 @@ object KeyPayloadFactory {
     fun keyCode(code: RemoteKeyCode, action: KeyAction = KeyAction.TAP): ByteArray =
         RemoteMessageEncoder.encodeKeyCode(code, action)
 
-    /** Opens [link] on the TV, in whichever app handles it. */
+    /** Opens [link] on the TV. */
     fun appLink(link: String): ByteArray =
         RemoteMessageEncoder.encodeAppLink(link)
 

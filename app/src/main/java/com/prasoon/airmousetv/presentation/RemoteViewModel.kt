@@ -80,8 +80,8 @@ class RemoteViewModel @Inject constructor(
 
     private fun observeImeField() {
         viewModelScope.launch {
-            repository.textInputOffered.collect { offered ->
-                _uiState.value = _uiState.value.copy(textInputOffered = offered)
+            repository.foregroundApp.collect { app ->
+                _uiState.value = _uiState.value.copy(foregroundApp = app)
             }
         }
         viewModelScope.launch {

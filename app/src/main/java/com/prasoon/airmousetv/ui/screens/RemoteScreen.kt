@@ -33,13 +33,18 @@ import androidx.compose.material.icons.filled.Keyboard
 import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.KeyboardArrowUp
 import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.PowerSettingsNew
 import androidx.compose.material.icons.filled.Remove
+import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.SkipNext
 import androidx.compose.material.icons.filled.SkipPrevious
 import androidx.compose.material.icons.filled.VolumeOff
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
+import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
@@ -73,6 +78,7 @@ import androidx.compose.ui.semantics.role
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import com.prasoon.airmousetv.data.model.KeyAction
@@ -97,6 +103,9 @@ fun RemoteScreen(viewModel: RemoteViewModel) {
     val uiState by viewModel.uiState.collectAsState()
     var padMode by rememberSaveable { mutableStateOf(PadMode.DPAD) }
     var showTextEntry by remember { mutableStateOf(false) }
+    var showYouTubeSearch by remember { mutableStateOf(false) }
+    val context = LocalContext.current
+    val clipboard = LocalClipboardManager.current
     // The TV asks for its keyboard by bumping showRequests; open text entry on each new request
     val showRequests = uiState.imeField?.showRequests ?: 0
     var seenRequests by remember { mutableIntStateOf(showRequests) }
@@ -110,17 +119,37 @@ fun RemoteScreen(viewModel: RemoteViewModel) {
         padMode = padMode,
         onPadModeChange = { padMode = it },
         onKey = viewModel::sendKey,
-        onShowKeyboard = { showTextEntry = true },
+        onShowKeyboard = {
+            if (uiState.imeField != null) {
+                showTextEntry = true
+            } else {
+                Toast.makeText(context, "Open a search box on the TV first", Toast.LENGTH_SHORT).show()
+            }
+        },
+        onShowYouTubeSearch = { showYouTubeSearch = true },
+        onCopyDiagnostics = {
+            clipboard.setText(AnnotatedString(viewModel.diagnosticsReport()))
+            Toast.makeText(context, "Diagnostics copied", Toast.LENGTH_SHORT).show()
+        },
         onSwitchTv = viewModel::switchTv
     )
 
     if (showTextEntry) {
         TextEntryDialog(viewModel = viewModel, onDismiss = { showTextEntry = false })
     }
+    if (showYouTubeSearch) {
+        YouTubeSearchDialog(onSearch = viewModel::searchYouTube, onDismiss = { showYouTubeSearch = false })
+    }
 }
 
 @Composable
-private fun Header(tvName: String, reconnecting: Boolean, enabled: Boolean, onKey: (TvKey, KeyAction) -> Unit) {
+private fun Header(
+    tvName: String,
+    reconnecting: Boolean,
+    enabled: Boolean,
+    onKey: (TvKey, KeyAction) -> Unit,
+    onCopyDiagnostics: () -> Unit
+) {
     Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
         Column(modifier = Modifier.weight(1f)) {
             Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -141,6 +170,27 @@ private fun Header(tvName: String, reconnecting: Boolean, enabled: Boolean, onKe
             shape = CircleShape,
             modifier = Modifier.size(44.dp)
         ) { KeyIcon(Icons.Default.PowerSettingsNew, "Power", tint = MaterialTheme.colorScheme.secondary) }
+        OverflowMenu(onCopyDiagnostics)
+    }
+}
+
+/** The "⋮" menu in the header: things that are about the app and the TV connection, not the remote keys. */
+@Composable
+private fun OverflowMenu(onCopyDiagnostics: () -> Unit) {
+    var expanded by remember { mutableStateOf(false) }
+    Box {
+        IconButton(onClick = { expanded = true }) {
+            Icon(Icons.Default.MoreVert, contentDescription = "More", tint = MaterialTheme.colorScheme.onSurfaceVariant)
+        }
+        DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
+            DropdownMenuItem(
+                text = { Text("Copy diagnostics") },
+                onClick = {
+                    expanded = false
+                    onCopyDiagnostics()
+                }
+            )
+        }
     }
 }
 
@@ -250,6 +300,7 @@ private fun LabeledKey(
     onClick: (() -> Unit)?,
     key: TvKey? = null,
     onKey: ((TvKey, KeyAction) -> Unit)? = null,
+    dimmed: Boolean = false,
     content: @Composable () -> Unit
 ) {
     Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -258,7 +309,7 @@ private fun LabeledKey(
             RemoteKey(key, onKey, enabled, size, MaterialTheme.shapes.medium, content = content)
         } else {
             KeySurface(
-                enabled = enabled,
+                enabled = enabled && !dimmed,
                 pressed = false,
                 shape = MaterialTheme.shapes.medium,
                 container = MaterialTheme.colorScheme.surfaceContainerHigh,
@@ -266,7 +317,12 @@ private fun LabeledKey(
                 content = content
             )
         }
-        Text(label, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        Text(
+            label,
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            textAlign = TextAlign.Center
+        )
     }
 }
 
@@ -282,6 +338,8 @@ private fun RemoteContent(
     onPadModeChange: (PadMode) -> Unit,
     onKey: (TvKey, KeyAction) -> Unit,
     onShowKeyboard: () -> Unit,
+    onShowYouTubeSearch: () -> Unit,
+    onCopyDiagnostics: () -> Unit,
     onSwitchTv: () -> Unit
 ) {
     val enabled = !uiState.isReconnecting
@@ -298,7 +356,7 @@ private fun RemoteContent(
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.spacedBy(20.dp)
     ) {
-        Header(tvName, reconnecting = uiState.isReconnecting, enabled = enabled, onKey = onKey)
+        Header(tvName, reconnecting = uiState.isReconnecting, enabled = enabled, onKey = onKey, onCopyDiagnostics = onCopyDiagnostics)
 
         uiState.error?.let {
             Text(it, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
@@ -320,8 +378,15 @@ private fun RemoteContent(
             LabeledKey("HOME", enabled, onClick = null, key = TvKey.HOME, onKey = onKey) {
                 KeyIcon(Icons.Default.Home, "Home")
             }
-            LabeledKey("KEYBOARD", enabled, onClick = onShowKeyboard) {
+            // Dimmed, but still tappable, while the TV has no text box: a tap then says what to do
+            LabeledKey("KEYBOARD", enabled, onClick = onShowKeyboard, dimmed = uiState.imeField == null) {
                 KeyIcon(Icons.Default.Keyboard, "Keyboard")
+            }
+            // YouTube draws its own keyboard that the TV can't type into, so offer a direct search
+            if (uiState.foregroundApp?.startsWith("com.google.android.youtube.tv") == true) {
+                LabeledKey("YOUTUBE\nSEARCH", enabled, onClick = onShowYouTubeSearch) {
+                    KeyIcon(Icons.Default.Search, "Search YouTube")
+                }
             }
         }
 
@@ -344,12 +409,13 @@ private fun TextEntryDialog(viewModel: RemoteViewModel, onDismiss: () -> Unit) {
     val field = uiState.imeField
     var text by remember { mutableStateOf(field?.value.orEmpty()) }
     val focusRequester = remember { FocusRequester() }
-    val clipboard = LocalClipboardManager.current
-    val context = LocalContext.current
 
     // Wait for the field to be laid out before asking for focus, or there is nothing to focus yet
     LaunchedEffect(Unit) {
         viewModel.beginTextEntry(text)
+        // A focused text box that hasn't opened the TV's keyboard yet (e.g. SmartTube's search the first
+        // time) takes no text edits. Pressing OK on it opens the keyboard, and the text session follows.
+        if (field != null && !field.acceptsText) viewModel.sendKey(TvKey.OK)
         withFrameNanos { }
         focusRequester.requestFocus()
     }
@@ -359,31 +425,22 @@ private fun TextEntryDialog(viewModel: RemoteViewModel, onDismiss: () -> Unit) {
         text = text,
         onTextChange = {
             text = it
-            viewModel.typeText(it)
+            // With no text box on the TV, letters sent as key presses go nowhere (or trigger shortcuts)
+            if (field != null) viewModel.typeText(it)
         },
         acceptsText = field?.acceptsText == true,
-        tvHasTextField = field != null,
-        textInputOffered = uiState.textInputOffered,
         focusRequester = focusRequester,
-        onCopyDiagnostics = {
-            clipboard.setText(AnnotatedString(viewModel.diagnosticsReport()))
-            Toast.makeText(context, "Diagnostics copied", Toast.LENGTH_SHORT).show()
-        },
         onEnter = {
             viewModel.submitText()
             onDismiss()
         },
-        onDismiss = onDismiss,
-        onSearchYouTube = {
-            viewModel.searchYouTube(text)
-            onDismiss()
-        }
+        onDismiss = onDismiss
     )
 }
 
 /**
- * The dialog itself. Without a text input session on the TV it explains why typing may not show
- * up: [textInputOffered] false means the TV never offered text input at all.
+ * The dialog itself. Without a text input session on the TV it explains why typing may not show up
+ * yet: the TV's text box is there but hasn't opened its keyboard.
  */
 @Composable
 private fun TextEntryDialogContent(
@@ -391,13 +448,9 @@ private fun TextEntryDialogContent(
     text: String,
     onTextChange: (String) -> Unit,
     acceptsText: Boolean,
-    tvHasTextField: Boolean,
-    textInputOffered: Boolean?,
     focusRequester: FocusRequester,
-    onCopyDiagnostics: () -> Unit,
     onEnter: () -> Unit,
     onDismiss: () -> Unit,
-    onSearchYouTube: (() -> Unit)? = null,
 ) {
     AlertDialog(
         onDismissRequest = onDismiss,
@@ -412,31 +465,73 @@ private fun TextEntryDialogContent(
                     keyboardActions = KeyboardActions(onSend = { onEnter() })
                 )
                 if (!acceptsText) {
-                    val hint = if (textInputOffered == false) {
-                        "This TV doesn't support typing from a phone. Use the TV's on-screen keyboard with the D-pad."
-                    } else if (!tvHasTextField) {
-                        "The TV isn't reporting a text box right now. Open a search or text box on the TV " +
-                            "first. Some apps, like Netflix, don't share theirs with remote apps: use the TV's " +
-                            "on-screen keyboard with the D-pad."
-                    } else {
-                        "No text input session with the TV, so letters are sent as key presses. Select the " +
-                            "text box on the TV first. If nothing appears, this TV or app ignores them: use the " +
-                            "TV's on-screen keyboard with the D-pad."
-                    }
                     Text(
-                        hint,
+                        "The TV's text box hasn't opened its keyboard yet, so OK was pressed on it. If nothing " +
+                            "appears, press OK on the text box on the TV yourself. If it still doesn't type, " +
+                            "this TV or app ignores typing: use the TV's on-screen keyboard with the D-pad.",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                         modifier = Modifier.padding(top = 8.dp)
                     )
-                    if (onSearchYouTube != null && text.isNotBlank()) {
-                        TextButton(onClick = onSearchYouTube) { Text("Search YouTube on TV") }
-                    }
-                    TextButton(onClick = onCopyDiagnostics) { Text("Copy diagnostics") }
                 }
             }
         },
         confirmButton = { TextButton(onClick = onEnter) { Text("Enter") } },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("Close") } }
+    )
+}
+
+/** Asks for a search and opens YouTube's results for it on the TV. */
+@Composable
+private fun YouTubeSearchDialog(onSearch: (String) -> Unit, onDismiss: () -> Unit) {
+    var query by remember { mutableStateOf("") }
+    val focusRequester = remember { FocusRequester() }
+    LaunchedEffect(Unit) {
+        withFrameNanos { }
+        focusRequester.requestFocus()
+    }
+    YouTubeSearchDialogContent(
+        query = query,
+        onQueryChange = { query = it },
+        focusRequester = focusRequester,
+        onSearch = {
+            onSearch(query)
+            onDismiss()
+        },
+        onDismiss = onDismiss
+    )
+}
+
+@Composable
+private fun YouTubeSearchDialogContent(
+    query: String,
+    onQueryChange: (String) -> Unit,
+    focusRequester: FocusRequester,
+    onSearch: () -> Unit,
+    onDismiss: () -> Unit,
+) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Search YouTube") },
+        text = {
+            Column {
+                OutlinedTextField(
+                    value = query,
+                    onValueChange = onQueryChange,
+                    modifier = Modifier.fillMaxWidth().focusRequester(focusRequester),
+                    singleLine = true,
+                    keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
+                    keyboardActions = KeyboardActions(onSearch = { if (query.isNotBlank()) onSearch() })
+                )
+                Text(
+                    "YouTube's own keyboard can't be typed into from a phone, so this opens the results on the TV.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(top = 8.dp)
+                )
+            }
+        },
+        confirmButton = { TextButton(onClick = onSearch, enabled = query.isNotBlank()) { Text("Search") } },
         dismissButton = { TextButton(onClick = onDismiss) { Text("Close") } }
     )
 }
@@ -604,7 +699,7 @@ private val previewMode = RemoteMode.Connected(
 @Composable
 private fun RemoteDPadPreview() {
     AirMouseTVRemoteTheme {
-        RemoteContent(RemoteUiState(mode = previewMode), PadMode.DPAD, {}, { _, _ -> }, {}, {})
+        RemoteContent(RemoteUiState(mode = previewMode), PadMode.DPAD, {}, { _, _ -> }, {}, {}, {}, {})
     }
 }
 
@@ -612,7 +707,7 @@ private fun RemoteDPadPreview() {
 @Composable
 private fun RemoteTouchpadPreview() {
     AirMouseTVRemoteTheme {
-        RemoteContent(RemoteUiState(mode = previewMode), PadMode.TOUCHPAD, {}, { _, _ -> }, {}, {})
+        RemoteContent(RemoteUiState(mode = previewMode), PadMode.TOUCHPAD, {}, { _, _ -> }, {}, {}, {}, {})
     }
 }
 
@@ -622,16 +717,8 @@ private fun RemoteReconnectingPreview() {
     AirMouseTVRemoteTheme {
         RemoteContent(
             RemoteUiState(mode = previewMode, isReconnecting = true, error = "Connection lost"),
-            PadMode.DPAD, {}, { _, _ -> }, {}, {}
+            PadMode.DPAD, {}, { _, _ -> }, {}, {}, {}, {}
         )
-    }
-}
-
-@Preview(showBackground = true, widthDp = 390, heightDp = 600, name = "Typing: TV offers no text input")
-@Composable
-private fun TextEntryNotOfferedPreview() {
-    AirMouseTVRemoteTheme {
-        TextEntryDialogContent("Type on TV", "hello", {}, acceptsText = false, tvHasTextField = false, textInputOffered = false, FocusRequester(), {}, {}, {})
     }
 }
 
@@ -639,7 +726,7 @@ private fun TextEntryNotOfferedPreview() {
 @Composable
 private fun TextEntryKeyFallbackPreview() {
     AirMouseTVRemoteTheme {
-        TextEntryDialogContent("Search", "hello", {}, acceptsText = false, tvHasTextField = true, textInputOffered = true, FocusRequester(), {}, {}, {})
+        TextEntryDialogContent("Search", "hello", {}, acceptsText = false, FocusRequester(), {}, {})
     }
 }
 
@@ -647,14 +734,25 @@ private fun TextEntryKeyFallbackPreview() {
 @Composable
 private fun TextEntrySessionPreview() {
     AirMouseTVRemoteTheme {
-        TextEntryDialogContent("Search", "hello", {}, acceptsText = true, tvHasTextField = true, textInputOffered = true, FocusRequester(), {}, {}, {})
+        TextEntryDialogContent("Search", "hello", {}, acceptsText = true, FocusRequester(), {}, {})
     }
 }
 
-@Preview(showBackground = true, widthDp = 390, heightDp = 600, name = "Typing: TV reports no text box")
+@Preview(showBackground = true, widthDp = 390, heightDp = 600, name = "YouTube search")
 @Composable
-private fun TextEntryNoFieldPreview() {
+private fun YouTubeSearchPreview() {
     AirMouseTVRemoteTheme {
-        TextEntryDialogContent("Type on TV", "hello", {}, acceptsText = false, tvHasTextField = false, textInputOffered = true, FocusRequester(), {}, {}, {}, onSearchYouTube = {})
+        YouTubeSearchDialogContent("songs", {}, FocusRequester(), {}, {})
+    }
+}
+
+@Preview(showBackground = true, widthDp = 390, heightDp = 844, name = "Remote in YouTube")
+@Composable
+private fun RemoteInYouTubePreview() {
+    AirMouseTVRemoteTheme {
+        RemoteContent(
+            RemoteUiState(mode = previewMode, foregroundApp = "com.google.android.youtube.tv"),
+            PadMode.DPAD, {}, { _, _ -> }, {}, {}, {}, {}
+        )
     }
 }

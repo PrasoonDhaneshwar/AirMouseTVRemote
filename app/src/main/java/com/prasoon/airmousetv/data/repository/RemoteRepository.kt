@@ -155,8 +155,8 @@ class RemoteRepository @Inject constructor(
         session.send(KeyPayloadFactory.keyPress(key, action))
     }
 
-    /** Whether the TV offered text input in its handshake; null until known. */
-    val textInputOffered get() = session.textInputOffered
+    /** Package of the app in front on the TV; null until it has reported one. */
+    val foregroundApp get() = session.foregroundApp
 
     /** Recent handshake and text-input events, for sharing in a bug report. */
     fun diagnosticsReport() = session.diagnosticsReport()
@@ -164,12 +164,16 @@ class RemoteRepository @Inject constructor(
     /**
      * Opens YouTube's search results for [query] on the TV, for TVs where typing into its own
      * keyboard isn't possible. Returns false if the TV can't open links.
+     *
+     * A plain vnd.youtube:// link, which only YouTube apps claim. An `intent://` link naming the
+     * package would avoid the "Open with" chooser on a TV with two YouTube apps, but the TV answers
+     * it with a RemoteError and closes the connection.
      */
-    suspend fun searchYouTube(query: String): Boolean =
-        // vnd.youtube:// is claimed only by YouTube apps. YouTube shows a "+" literally, so spaces must be %20.
-        session.launchLink(
-            "vnd.youtube://results?search_query=" + java.net.URLEncoder.encode(query, "UTF-8").replace("+", "%20")
-        )
+    suspend fun searchYouTube(query: String): Boolean {
+        // YouTube shows a "+" literally, so spaces must be %20
+        val encoded = java.net.URLEncoder.encode(query, "UTF-8").replace("+", "%20")
+        return session.launchLink("vnd.youtube://results?search_query=$encoded")
+    }
 
     /** Serialises typing so edits made in quick succession reach the TV in order. */
     private val typingLock = Mutex()
