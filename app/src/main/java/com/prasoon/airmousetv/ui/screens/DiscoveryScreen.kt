@@ -34,7 +34,6 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
@@ -55,6 +54,7 @@ import com.prasoon.airmousetv.data.model.RemoteUiState
 import com.prasoon.airmousetv.presentation.RemoteViewModel
 import com.prasoon.airmousetv.ui.theme.AirMouseTVRemoteTheme
 import com.prasoon.airmousetv.ui.theme.Online
+import kotlinx.coroutines.awaitCancellation
 
 /** Lists TVs found on the network. Tapping a row connects to it ([onTvSelected]). */
 @Composable
@@ -66,15 +66,17 @@ fun DiscoveryScreen(
     val uiState by viewModel.uiState.collectAsState()
     val lifecycleOwner = LocalLifecycleOwner.current
 
-    // Starts discovery when STARTED, cancels when STOPPED
+    // Discovery runs only while the screen is STARTED. The block is cancelled when the app goes to
+    // the background (STOPPED) and when this screen leaves the composition, and either way the
+    // finally stops the scan and the liveness probes.
     LaunchedEffect(lifecycleOwner) {
         lifecycleOwner.repeatOnLifecycle(Lifecycle.State.STARTED) {
             viewModel.startDiscovery()
-        }
-    }
-    DisposableEffect(Unit) {
-        onDispose {
-            viewModel.stopDiscovery()
+            try {
+                awaitCancellation()
+            } finally {
+                viewModel.stopDiscovery()
+            }
         }
     }
 

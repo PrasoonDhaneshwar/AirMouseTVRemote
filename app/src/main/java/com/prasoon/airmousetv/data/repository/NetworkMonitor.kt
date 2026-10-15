@@ -30,19 +30,15 @@ class NetworkMonitor @Inject constructor(
     private val wifiManager =
         context.getSystemService(Context.WIFI_SERVICE) as WifiManager
 
-    // Exposed flows
+    /**
+     * Whether a usable network is up. The value only follows the network while something collects
+     * this flow, so use it as a flow (e.g. `first { it }`), not through `.value`, which can be stale.
+     */
     val isNetworkAvailable: StateFlow<Boolean> =
         networkAvailabilityFlow().stateIn(
             scope,
             SharingStarted.WhileSubscribed(5_000),
             initialValue = currentNetworkConnected()
-        )
-
-    val isWifiEnabled: StateFlow<Boolean> =
-        wifiEnabledFlow().stateIn(
-            scope,
-            SharingStarted.WhileSubscribed(5_000),
-            initialValue = wifiManager.isWifiEnabled
         )
 
     init {
@@ -92,16 +88,6 @@ class NetworkMonitor @Inject constructor(
 
         awaitClose {
             connectivityManager.unregisterNetworkCallback(callback)
-        }
-    }
-
-    private fun wifiEnabledFlow(): Flow<Boolean> = callbackFlow {
-        // There is no simple callback for Wi‑Fi enable/disable that is stable across versions,
-        // so this is kept simple. If you need real‑time Wi‑Fi state, add a BroadcastReceiver
-        // for WIFI_STATE_CHANGED_ACTION and forward its values into this flow.
-        trySend(wifiManager.isWifiEnabled)
-        awaitClose {
-            // no‑op for now
         }
     }
 }

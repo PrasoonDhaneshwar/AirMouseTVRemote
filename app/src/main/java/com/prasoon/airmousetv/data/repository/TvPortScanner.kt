@@ -2,6 +2,9 @@ package com.prasoon.airmousetv.data.repository
 
 import android.util.Log
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.withContext
 import java.net.InetSocketAddress
 import java.net.Socket
@@ -9,6 +12,8 @@ import javax.inject.Inject
 import javax.inject.Singleton
 
 private const val TAG_SCANNER = "TvPortScanner"
+private const val PROBE_TIMEOUT_MS = 1500
+private const val MAX_NAME_LENGTH = 64
 
 /**
  * Performs HTTP GETs against known TV ports and extracts friendlyName/deviceName.
@@ -24,104 +29,78 @@ class TvPortScanner @Inject constructor(
 
     /**
      * Suspends while scanning; returns a friendly name if found, or null.
-     * This is a pure function from host -> String? (no state except via cache).
+     * The ports are probed in parallel, so the wait is one probe timeout, not one per port.
      */
     suspend fun fetchFriendlyName(host: String): String? = withContext(Dispatchers.IO) {
         Log.d(TAG_SCANNER, "🔍 Scanning $host on TV ports...")
 
         // STEP 1: try cached port
         cache.getCachedPort(host)?.let { cachedPort ->
-            Log.d(TAG_SCANNER, "💾 Using cached port $cachedPort for $host")
-            try {
-                val result = queryPort(host, cachedPort, isCached = true)
-                if (result != null) {
-                    Log.i(TAG_SCANNER, "✅ Cache HIT: '$result'")
-                    return@withContext result
-                }
-            } catch (e: Exception) {
-                Log.d(TAG_SCANNER, "💥 Cached port $cachedPort failed, full scanning...")
+            queryPort(host, cachedPort)?.let {
+                Log.i(TAG_SCANNER, "✅ Cache HIT: '$it'")
+                return@withContext it
             }
+            Log.d(TAG_SCANNER, "💥 Cached port $cachedPort failed, full scanning...")
         }
 
-        // STEP 2: full scan
-        for (port in TV_PORTS) {
-            try {
-                val result = queryPort(host, port, isCached = false)
-                if (result != null) {
-                    cache.saveWorkingPort(host, port)
-                    Log.i(TAG_SCANNER, "✅ Found '$result' on port $port! CACHED.")
-                    return@withContext result
-                }
-            } catch (e: Exception) {
-                Log.d(TAG_SCANNER, "Port $port failed: ${e.message}")
-            }
+        // STEP 2: full scan, all ports at once; the first port in list order that answers wins
+        val found = coroutineScope {
+            TV_PORTS
+                .map { port -> async { queryPort(host, port)?.let { port to it } } }
+                .awaitAll()
+                .firstNotNullOfOrNull { it }
         }
+        if (found == null) {
+            Log.d(TAG_SCANNER, "❌ No friendly name found via HTTP")
+            return@withContext null
+        }
+        cache.saveWorkingPort(host, found.first)
+        Log.i(TAG_SCANNER, "✅ Found '${found.second}' on port ${found.first}! CACHED.")
+        found.second
+    }
 
-        Log.d(TAG_SCANNER, "❌ No friendly name found via HTTP")
+    /** Executes GET / on the given port and tries to parse a friendly name; null if the port is closed or has none. */
+    private fun queryPort(host: String, port: Int): String? = try {
+        Socket().use { socket ->
+            socket.soTimeout = PROBE_TIMEOUT_MS
+            socket.connect(InetSocketAddress(host, port), PROBE_TIMEOUT_MS)
+
+            // Write, then read on the same socket: closing the output stream would close the socket itself
+            socket.getOutputStream().apply {
+                write("GET / HTTP/1.1\r\nHost: $host:$port\r\nUser-Agent: Android/Remote\r\n\r\n".toByteArray(Charsets.UTF_8))
+                flush()
+            }
+
+            val buffer = ByteArray(2048)
+            val bytes = socket.getInputStream().read(buffer)
+            if (bytes > 0) String(buffer, 0, bytes, Charsets.UTF_8).findFriendlyName() else null
+        }
+    } catch (e: Exception) {
+        Log.d(TAG_SCANNER, "Port $port failed: ${e.message}")
         null
     }
+}
 
-    /**
-     * Executes GET / on the given port and tries to parse a friendly name.
-     */
-    private fun queryPort(host: String, port: Int, isCached: Boolean): String? {
-        val socket = Socket()
-        socket.soTimeout = 1500
+private val FRIENDLY_NAME_PATTERNS: List<Regex> = listOf(
+    // JSON
+    "\"friendlyName\"\\s*:\\s*\"([^\"]+)\"",
+    "\"deviceName\"\\s*:\\s*\"([^\"]+)\"",
+    "\"name\"\\s*:\\s*\"([^\"]+)\"",
+    // XML
+    "<friendlyName[^>]*>([^<]+)</friendlyName>",
+    "<deviceName[^>]*>([^<]+)</deviceName>",
+    // Header; the class has no newline, so the value ends at the end of the line
+    "FRIENDLY[ \\t]*:[ \\t]*([\\w\\- +.]+)"
+).map { Regex(it, RegexOption.IGNORE_CASE) }
 
-        socket.connect(InetSocketAddress(host, port), 1500)
+/** A name taken from the network: any device on the Wi-Fi can choose it, so strip control characters and cap the length. */
+internal fun String.cleanDeviceName(): String =
+    filterNot { it.isISOControl() }.trim().take(MAX_NAME_LENGTH)
 
-        socket.getOutputStream().use { out ->
-            val request =
-                "GET / HTTP/1.1\r\nHost: $host:$port\r\nUser-Agent: Android/Remote\r\n\r\n"
-            out.write(request.toByteArray(Charsets.UTF_8))
-            out.flush()
-        }
-
-        socket.getInputStream().use { input ->
-            val buffer = ByteArray(2048)
-            val bytes = input.read(buffer)
-            if (bytes > 0) {
-                val response = String(buffer, 0, bytes, Charsets.UTF_8)
-                if (isCached) {
-                    Log.d(TAG_SCANNER, "📄 Cached port $port: ${response.take(100)}...")
-                } else {
-                    Log.d(TAG_SCANNER, "📄 Port $port response: ${response.take(200)}...")
-                }
-                val name = response.findFriendlyName()
-                if (name != null) return name
-            }
-        }
-
-        socket.close()
-        return null
+/** Extracts friendlyName/deviceName from JSON, XML, or headers, trying them in that order. */
+internal fun String.findFriendlyName(): String? =
+    FRIENDLY_NAME_PATTERNS.firstNotNullOfOrNull { pattern ->
+        pattern.find(this)?.groupValues?.getOrNull(1)
+            ?.cleanDeviceName()
+            ?.takeIf { it.isNotEmpty() && !it.equals("unknown", ignoreCase = true) }
     }
-}
-
-/**
- * Extracts friendlyName/deviceName from JSON, XML, or headers.
- * This is the same logic you had, just isolated.
- */
-private fun String.findFriendlyName(): String? = try {
-    // JSON patterns
-    "\"friendlyName\"\\s*:.*?\"([^\"]+)\"".toRegex()
-        .find(this)?.groupValues?.getOrNull(1)
-        ?: "\"deviceName\"\\s*:.*?\"([^\"]+)\"".toRegex()
-            .find(this)?.groupValues?.getOrNull(1)
-        ?: "\"name\"\\s*:.*?\"([^\"]+)\"".toRegex()
-            .find(this)?.groupValues?.getOrNull(1)
-
-        // XML patterns
-        ?: "<friendlyName[^>]*>([^<]+)</friendlyName>".toRegex(RegexOption.IGNORE_CASE)
-            .find(this)?.groupValues?.getOrNull(1)
-        ?: "<deviceName[^>]*>([^<]+)</deviceName>".toRegex(RegexOption.IGNORE_CASE)
-            .find(this)?.groupValues?.getOrNull(1)
-
-        // Header pattern
-        ?: "FRIENDLY\\s*:\\s*([\\w\\s\\-\\+\\.]+)".toRegex(RegexOption.IGNORE_CASE)
-            .find(this)?.groupValues?.getOrNull(1)
-            ?.trim()
-            ?.takeIf { it.length > 2 && it != "unknown" }
-} catch (e: Exception) {
-    Log.e(TAG_SCANNER, "Regex failed", e)
-    null
-}

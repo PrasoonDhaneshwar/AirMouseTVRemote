@@ -15,10 +15,12 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import java.util.concurrent.ConcurrentHashMap
 import javax.inject.Inject
 import javax.inject.Singleton
 
@@ -66,11 +68,12 @@ class RemoteRepository @Inject constructor(
         }
 
         discoveryJob = scope.launch {
-            // Read the latest value directly rather than suspending on the flow
+            // Collecting (rather than reading .value) is what keeps the monitor current, and it
+            // makes discovery start by itself once the network comes up. stopDiscovery() cancels the wait.
             if (!networkMonitor.isNetworkAvailable.value) {
                 Log.d(TAG, "🌐 Network not connected, waiting...")
-                return@launch
             }
+            networkMonitor.isNetworkAvailable.first { it }
 
             nsdDiscoveryEngine.startDiscovery()
         }
@@ -94,23 +97,31 @@ class RemoteRepository @Inject constructor(
         updateDiscoveredList(tv)
     }
 
-    override fun onHttpScanNeeded(tv: DiscoveredTv) {
-        scope.launch {
-            // Show a name derived from the service name straight away; the HTTP lookup below may replace it
-            val fallbackName = tv.name.split("-").first()
-                .replace(Regex("[^A-Z0-9]"), "").take(8).uppercase() + " TV"
-            updateDiscoveredList(tv.copy(friendlyName = fallbackName))
+    /** Hosts whose name lookup is running; NSD can report the same TV many times in a row. */
+    private val scansInFlight = ConcurrentHashMap.newKeySet<String>()
 
-            // Try HTTP scan
-            val friendlyName = tvPortScanner.fetchFriendlyName(tv.host)
-            val finalTv = if (friendlyName != null && friendlyName != fallbackName) {
-                Log.i("RemoteRepository", "✅ HTTP found real name: $friendlyName")
-                tv.copy(friendlyName = friendlyName)
-            } else {
-                Log.i("RemoteRepository", "🔄 Keeping fallback: $fallbackName")
-                tv.copy(friendlyName = fallbackName)
+    override fun onHttpScanNeeded(tv: DiscoveredTv) {
+        if (!scansInFlight.add(tv.host)) return
+        scope.launch {
+            try {
+                // Show a name derived from the service name straight away; the HTTP lookup below may replace it
+                val fallbackName = tv.name.split("-").first()
+                    .replace(Regex("[^A-Z0-9]"), "").take(8).uppercase() + " TV"
+                updateDiscoveredList(tv.copy(friendlyName = fallbackName))
+
+                // Try HTTP scan
+                val friendlyName = tvPortScanner.fetchFriendlyName(tv.host)
+                val finalTv = if (friendlyName != null && friendlyName != fallbackName) {
+                    Log.i("RemoteRepository", "✅ HTTP found real name: $friendlyName")
+                    tv.copy(friendlyName = friendlyName)
+                } else {
+                    Log.i("RemoteRepository", "🔄 Keeping fallback: $fallbackName")
+                    tv.copy(friendlyName = fallbackName)
+                }
+                updateDiscoveredList(finalTv)
+            } finally {
+                scansInFlight.remove(tv.host)
             }
-            updateDiscoveredList(finalTv)
         }
     }
 

@@ -22,6 +22,8 @@ private const val SERVICE_TYPE_CAST = "_googlecast._tcp."
 // Advertised by the TV's remote service itself (port 6466), so it is present whenever the remote works
 private const val SERVICE_TYPE_REMOTE = "_androidtvremote2._tcp."
 private val SERVICE_TYPES = listOf(SERVICE_TYPE_REMOTE, SERVICE_TYPE_CAST)
+/** TXT record keys that may hold the TV's display name, in order of preference. */
+private val NAME_ATTRIBUTES = listOf("fn", "friendlyName", "name", "deviceName")
 
 /**
  * Callback interface for discovery events - RemoteRepository implements this
@@ -44,9 +46,15 @@ class NsdDiscoveryEngine @Inject constructor(
     private val executor = Executors.newSingleThreadExecutor()
 
     private val discoveryListeners = mutableListOf<NsdManager.DiscoveryListener>()
-    private val serviceInfoCallbacks = mutableListOf<NsdManager.ServiceInfoCallback>()
-    private var resolveListener: NsdManager.ResolveListener? = null
 
+    /** API 34+: one callback per service name, so a service announced again doesn't stack callbacks. */
+    private val serviceInfoCallbacks = ConcurrentHashMap<String, NsdManager.ServiceInfoCallback>()
+
+    /** Below API 34: services waiting to be resolved. NsdManager resolves one at a time, so they queue. */
+    private val pendingResolves = ArrayDeque<NsdServiceInfo>()
+    private var resolving = false
+
+    /** Held only while discovery runs; multicast reception costs battery. */
     private var multicastLock: WifiManager.MulticastLock? = null
 
     /**
@@ -58,17 +66,14 @@ class NsdDiscoveryEngine @Inject constructor(
     // Callback registry (for RemoteRepository)
     private val listeners = mutableSetOf<NsdDiscoveryListener>()
 
-    init {
-        acquireMulticastLock()
-    }
-
-    fun  startDiscovery() {
+    fun startDiscovery() {
         if (discoveryListeners.isNotEmpty()) {
             Log.w(TAG_NSD, "⚠️ Discovery already active")
             return
         }
 
         Log.d(TAG_NSD, "🔍 Starting TV discovery...")
+        acquireMulticastLock()
         SERVICE_TYPES.forEach { type ->
             val listener = createDiscoveryListener(type)
             discoveryListeners.add(listener)
@@ -91,18 +96,13 @@ class NsdDiscoveryEngine @Inject constructor(
         }
         discoveryListeners.clear()
 
-        serviceInfoCallbacks.forEach {
-            try {
-                if (Build.VERSION.SDK_INT >= 34) {
-                    nsdManager.unregisterServiceInfoCallback(it)
-                }
-            } catch (e: Exception) {
-                Log.w(TAG_NSD, "ServiceInfoCallback cleanup ignored", e)
-            }
+        serviceInfoCallbacks.keys.toList().forEach(::unregisterServiceInfoCallback)
+        synchronized(pendingResolves) {
+            pendingResolves.clear()
+            resolving = false
         }
-        serviceInfoCallbacks.clear()
-        resolveListener = null
         resolvedRemoteHosts.clear()
+        releaseMulticastLock()
 
         Log.d(TAG_NSD, "🧹 Discovery fully cleaned")
     }
@@ -153,6 +153,8 @@ class NsdDiscoveryEngine @Inject constructor(
 
         override fun onServiceLost(serviceInfo: NsdServiceInfo) {
             Log.w(TAG_NSD, "🔌 Service lost: ${serviceInfo.serviceName}")
+            // A TV that comes back is announced again and gets a fresh callback
+            unregisterServiceInfoCallback(serviceKey(serviceInfo))
             // Only the remote service matters: the cast one can come and go while the remote still works
             if (browseType == SERVICE_TYPE_REMOTE) {
                 val host = resolvedRemoteHosts.remove(serviceInfo.serviceName)
@@ -169,9 +171,43 @@ class NsdDiscoveryEngine @Inject constructor(
         }
     }
 
+    /** A service was resolved to an address: list it under its TXT name, or ask for an HTTP name lookup if it has none. */
+    private fun handleResolved(discovered: NsdServiceInfo, info: NsdServiceInfo) {
+        val host = info.host?.hostAddress ?: return
+        val port = info.port.takeIf { it > 0 } ?: return
+
+        Log.d(TAG_NSD, "📍 Resolved ${info.serviceName} -> $host:$port")
+        rememberRemoteHost(discovered.serviceType, info.serviceName, host)
+        Log.d(TAG_NSD, "📋 TXT Records: ${info.attributes.map {
+            "${it.key}=${it.value?.toString(Charsets.UTF_8)?.take(50)}"
+        }}")
+
+        val friendlyNameFromTxt = (NAME_ATTRIBUTES.firstNotNullOfOrNull { info.attributes[it]?.toString(Charsets.UTF_8) }
+            ?: info.serviceName.takeIf { discovered.serviceType.contains(SERVICE_TYPE_REMOTE) })
+            ?.cleanDeviceName()
+
+        if (!friendlyNameFromTxt.isNullOrBlank()) {
+            Log.i(TAG_NSD, "🎉 TXT friendlyName: $friendlyNameFromTxt")
+            val tv = DiscoveredTv(
+                name = info.serviceName,
+                friendlyName = friendlyNameFromTxt,
+                host = host,
+                port = port
+            )
+            scope.launch { notifyDiscoveredTv(tv) }
+            return
+        }
+
+        Log.d(TAG_NSD, "🔍 No TXT name, trying HTTP scan...")
+        val tv = DiscoveredTv(name = info.serviceName, host = host, port = port)
+        scope.launch { notifyHttpScanNeeded(tv) }
+    }
+
     // ===== API 34+ path (ServiceInfoCallback) =====
     private fun startServiceInfoCallback(discovered: NsdServiceInfo) {
         if (Build.VERSION.SDK_INT < 34) return
+        val key = serviceKey(discovered)
+        if (serviceInfoCallbacks.containsKey(key)) return
 
         val baseInfo = NsdServiceInfo().apply {
             serviceName = discovered.serviceName
@@ -179,114 +215,108 @@ class NsdDiscoveryEngine @Inject constructor(
         }
 
         val callback = object : NsdManager.ServiceInfoCallback {
-            override fun onServiceUpdated(info: NsdServiceInfo) {
-                val host = info.host?.hostAddress ?: return
-                val port = info.port.takeIf { it > 0 } ?: return
-
-                Log.d(TAG_NSD, "📍 Resolved ${info.serviceName} -> $host:$port")
-                rememberRemoteHost(discovered.serviceType, info.serviceName, host)
-                Log.d(TAG_NSD, "📋 TXT Records: ${info.attributes.map {
-                    "${it.key}=${it.value?.toString(Charsets.UTF_8)?.take(50)}"
-                }}")
-
-                val friendlyNameFromTxt = info.attributes["fn"]?.toString(Charsets.UTF_8)
-                    ?: info.attributes["friendlyName"]?.toString(Charsets.UTF_8)
-                    ?: info.attributes["name"]?.toString(Charsets.UTF_8)
-                    ?: info.attributes["deviceName"]?.toString(Charsets.UTF_8)
-                    ?: info.serviceName.takeIf { discovered.serviceType.contains(SERVICE_TYPE_REMOTE) }
-
-                if (!friendlyNameFromTxt.isNullOrBlank()) {
-                    Log.i(TAG_NSD, "🎉 TXT friendlyName: $friendlyNameFromTxt")
-                    val tv = DiscoveredTv(
-                        name = info.serviceName,
-                        friendlyName = friendlyNameFromTxt,
-                        host = host,
-                        port = port
-                    )
-                    scope.launch { notifyDiscoveredTv(tv) }
-                    return
-                }
-
-                Log.d(TAG_NSD, "🔍 No TXT name, trying HTTP scan...")
-                val tv = DiscoveredTv(name = info.serviceName, host = host, port = port)
-                scope.launch { notifyHttpScanNeeded(tv) }
-            }
-
+            override fun onServiceUpdated(info: NsdServiceInfo) = handleResolved(discovered, info)
             override fun onServiceLost() {}
             override fun onServiceInfoCallbackRegistrationFailed(errorCode: Int) {
                 Log.e(TAG_NSD, "ServiceInfoCallback registration failed: $errorCode")
+                serviceInfoCallbacks.remove(key)
             }
             override fun onServiceInfoCallbackUnregistered() {}
         }
 
-        serviceInfoCallbacks.add(callback)
+        serviceInfoCallbacks[key] = callback
         nsdManager.registerServiceInfoCallback(baseInfo, executor, callback)
+    }
+
+    private fun serviceKey(info: NsdServiceInfo) = "${info.serviceName}|${info.serviceType}"
+
+    private fun unregisterServiceInfoCallback(key: String) {
+        val callback = serviceInfoCallbacks.remove(key) ?: return
+        try {
+            if (Build.VERSION.SDK_INT >= 34) {
+                nsdManager.unregisterServiceInfoCallback(callback)
+            }
+        } catch (e: Exception) {
+            Log.w(TAG_NSD, "ServiceInfoCallback cleanup ignored", e)
+        }
     }
 
     // ===== Legacy path, below API 34 (ResolveListener) =====
     private fun startResolveLegacy(discovered: NsdServiceInfo) {
         if (Build.VERSION.SDK_INT >= 34) return
 
+        synchronized(pendingResolves) {
+            if (pendingResolves.any { serviceKey(it) == serviceKey(discovered) }) return
+            pendingResolves.addLast(discovered)
+        }
+        resolveNextLegacy()
+    }
+
+    /** Starts the next queued resolve unless one is already running; each resolve starts the next when it ends. */
+    @Suppress("DEPRECATION")
+    private fun resolveNextLegacy() {
+        val next = synchronized(pendingResolves) {
+            if (resolving) return
+            val service = pendingResolves.removeFirstOrNull() ?: return
+            resolving = true
+            service
+        }
+
         val listener = object : NsdManager.ResolveListener {
             override fun onServiceResolved(info: NsdServiceInfo) {
-                val host = info.host?.hostAddress ?: return
-                val port = info.port.takeIf { it > 0 } ?: return
-                Log.d(TAG_NSD, "📍 Resolved ${info.serviceName} -> $host:$port")
-                rememberRemoteHost(discovered.serviceType, info.serviceName, host)
-
-                Log.d(TAG_NSD, "📋 TXT Records: ${info.attributes.map {
-                    "${it.key}=${it.value?.toString(Charsets.UTF_8)?.take(50)}"
-                }}")
-
-                val friendlyNameFromTxt = info.attributes["fn"]?.toString(Charsets.UTF_8)
-                    ?: info.attributes["friendlyName"]?.toString(Charsets.UTF_8)
-                    ?: info.attributes["name"]?.toString(Charsets.UTF_8)
-                    ?: info.attributes["deviceName"]?.toString(Charsets.UTF_8)
-                    ?: info.serviceName.takeIf { discovered.serviceType.contains(SERVICE_TYPE_REMOTE) }
-
-                if (!friendlyNameFromTxt.isNullOrBlank()) {
-                    Log.i(TAG_NSD, "🎉 TXT friendlyName: $friendlyNameFromTxt")
-                    val tv = DiscoveredTv(
-                        name = info.serviceName,
-                        friendlyName = friendlyNameFromTxt,
-                        host = host,
-                        port = port
-                    )
-                    scope.launch { notifyDiscoveredTv(tv) }
-                    return
+                try {
+                    handleResolved(next, info)
+                } finally {
+                    finishLegacyResolve()
                 }
-
-                Log.d(TAG_NSD, "🔍 No TXT name, trying HTTP scan...")
-                val tv = DiscoveredTv(name = info.serviceName, host = host, port = port)
-                scope.launch { notifyHttpScanNeeded(tv) }
             }
 
             override fun onResolveFailed(serviceInfo: NsdServiceInfo, errorCode: Int) {
                 Log.e(TAG_NSD, "💥 Resolve failed: $errorCode for ${serviceInfo.serviceName}")
+                finishLegacyResolve()
             }
             override fun onResolutionStopped(serviceInfo: NsdServiceInfo) {}
             override fun onStopResolutionFailed(serviceInfo: NsdServiceInfo, errorCode: Int) {}
         }
 
-        resolveListener = listener
-        nsdManager.resolveService(discovered, listener)
+        try {
+            nsdManager.resolveService(next, listener)
+        } catch (e: Exception) {
+            Log.e(TAG_NSD, "resolveService threw for ${next.serviceName}", e)
+            finishLegacyResolve()
+        }
+    }
+
+    private fun finishLegacyResolve() {
+        synchronized(pendingResolves) { resolving = false }
+        resolveNextLegacy()
     }
 
     private fun acquireMulticastLock() {
+        if (multicastLock?.isHeld == true) return
         try {
             val wifiManager = context.getSystemService(Context.WIFI_SERVICE) as WifiManager
-            multicastLock = wifiManager.createMulticastLock("airmousetv.nsd")
-            multicastLock?.setReferenceCounted(true)
-            multicastLock?.acquire()
+            multicastLock = wifiManager.createMulticastLock("airmousetv.nsd").apply {
+                setReferenceCounted(false)
+                acquire()
+            }
             Log.d(TAG_NSD, "🔒 Multicast lock acquired")
         } catch (e: Exception) {
             Log.e(TAG_NSD, "Failed to acquire multicast lock", e)
         }
     }
 
-    fun releaseResources() {
-        multicastLock?.release()
-        Log.d(TAG_NSD, "🔓 Multicast lock RELEASED")
+    private fun releaseMulticastLock() {
+        try {
+            multicastLock?.takeIf { it.isHeld }?.release()
+            Log.d(TAG_NSD, "🔓 Multicast lock released")
+        } catch (e: Exception) {
+            Log.w(TAG_NSD, "Failed to release multicast lock", e)
+        }
         multicastLock = null
+    }
+
+    fun releaseResources() {
+        releaseMulticastLock()
     }
 }

@@ -66,8 +66,12 @@ private const val REMOTE_PORT = 6466
  */
 private const val APP_LINK_FEATURE = 512
 private const val SUPPORTED_FEATURES = 1 or 2 or 4 or 32 or 64 or 512
-/** How long to wait for an already-paired TV to activate the session before pairing instead. */
-private const val TRUSTED_CHECK_TIMEOUT_MS = 3000L
+/**
+ * How long to wait for an already-paired TV to activate the session before pairing instead. A TV
+ * that doesn't trust us closes the connection at once, so this only has to cover a slow trusted
+ * TV, such as a stick waking from standby.
+ */
+private const val TRUSTED_CHECK_TIMEOUT_MS = 10_000L
 /** TCP connect timeout; a TV on the same LAN answers (or refuses) well within this. */
 private const val CONNECT_TIMEOUT_MS = 4000
 /** No bytes from the TV for this long on the remote connection means it is gone; most TVs ping every ~5 s, but a waipu stick went quiet for over 15 s. */
@@ -140,7 +144,7 @@ class RemoteSessionManager(private val context: Context) {
 
     /** Recent handshake and text-input events, as plain text to paste into a bug report. */
     @Synchronized
-    fun diagnosticsReport(): String = diagnostics.joinToString("")
+    fun diagnosticsReport(): String = diagnostics.joinToString("\n")
 
     /** True once the TV has pinged in this remote session, which tells us it keeps the line busy while idle. */
     @Volatile private var pingSeen = false
@@ -179,14 +183,7 @@ class RemoteSessionManager(private val context: Context) {
      * 6466 comes up immediately; otherwise it drops us and we fall back to Polo pairing.
      */
     suspend fun connect(host: String, clientName: String = "AirMouseTV") {
-        closeConn(pairingConn)
-        closeConn(remoteConn)
-        pairingConn = null
-        remoteConn = null
-        phase = Phase.IDLE
-        this.host = host
-        _imeField.value = null
-        _connectionState.value = ConnectionState.Idle
+        resetConnections(host)
 
         if (tryRemoteSession(host)) return
         startPairing(host, clientName)
@@ -198,6 +195,12 @@ class RemoteSessionManager(private val context: Context) {
      * trusts our certificate.
      */
     suspend fun reconnect(host: String): Boolean {
+        resetConnections(host)
+        return tryRemoteSession(host)
+    }
+
+    /** Drops any open connection and returns to a clean idle state aimed at [host]. */
+    private fun resetConnections(host: String) {
         closeConn(pairingConn)
         closeConn(remoteConn)
         pairingConn = null
@@ -206,7 +209,6 @@ class RemoteSessionManager(private val context: Context) {
         this.host = host
         _imeField.value = null
         _connectionState.value = ConnectionState.Idle
-        return tryRemoteSession(host)
     }
 
     /**
@@ -267,7 +269,7 @@ class RemoteSessionManager(private val context: Context) {
         send(PairingPayloadFactory.createPairingRequest(clientName), conn)
         _connectionState.value = ConnectionState.PairingRequested
 
-        startReaderLoop(conn, ::handlePoloFrame)
+        startReaderLoop(conn) { handlePoloFrame(conn, it) }
     }
 
     /** Connects to the remote-control port and starts reading from it. */
@@ -281,7 +283,7 @@ class RemoteSessionManager(private val context: Context) {
         pingSeen = false
         conn.socket.soTimeout = UNPINGED_READ_TIMEOUT_MS
         remoteConn = conn
-        startReaderLoop(conn, ::handleRemoteFrame)
+        startReaderLoop(conn) { handleRemoteFrame(conn, it) }
         return conn
     }
 
@@ -432,6 +434,7 @@ class RemoteSessionManager(private val context: Context) {
 
     /** Reads frames from [conn] and passes each to [handler] until the connection closes or fails. */
     private fun startReaderLoop(conn: Conn, handler: suspend (ByteArray) -> Unit) {
+        // Each loop serves only its own connection, so a late frame from a replaced one is never acted on as the current one
         scope.launch {
             try {
                 while (isActive && !conn.closed) {
@@ -466,7 +469,8 @@ class RemoteSessionManager(private val context: Context) {
      * Advances the pairing handshake. A non-OK status from the TV is reported as an error;
      * messages that arrive out of order for the current [phase] are ignored.
      */
-    private suspend fun handlePoloFrame(bytes: ByteArray) {
+    private suspend fun handlePoloFrame(conn: Conn, bytes: ByteArray) {
+        if (conn !== pairingConn) return
         logFrame("Received", bytes)
         val message = try {
             OuterMessage.parseFrom(bytes)
@@ -474,16 +478,24 @@ class RemoteSessionManager(private val context: Context) {
             Log.e(TAG, "Failed to parse Polo frame", e)
             return
         }
-        val conn = pairingConn ?: return
 
         if (message.status != OuterMessage.Status.STATUS_OK) {
             Log.e(TAG, "TV returned ${message.status} in phase $phase")
-            val reason = when (message.status) {
-                OuterMessage.Status.STATUS_BAD_SECRET -> "Wrong pairing code"
-                OuterMessage.Status.STATUS_BAD_CONFIGURATION -> "TV rejected pairing configuration"
-                else -> "TV rejected pairing (${message.status})"
+            if (message.status == OuterMessage.Status.STATUS_BAD_SECRET) {
+                // The user can type the code again on the same connection
+                phase = Phase.AWAIT_CODE
+                _connectionState.value = ConnectionState.Error("Wrong pairing code")
+            } else {
+                // Retrying the same handshake can't help; end this attempt
+                val reason = when (message.status) {
+                    OuterMessage.Status.STATUS_BAD_CONFIGURATION -> "TV rejected pairing configuration"
+                    else -> "TV rejected pairing (${message.status})"
+                }
+                closeConn(conn)
+                pairingConn = null
+                phase = Phase.IDLE
+                _connectionState.value = ConnectionState.Error(reason)
             }
-            _connectionState.value = ConnectionState.Error(reason)
             return
         }
 
@@ -557,8 +569,8 @@ class RemoteSessionManager(private val context: Context) {
     }
 
     /** Handles the remote-control handshake (configure, set-active), ping replies and TV notices. */
-    private suspend fun handleRemoteFrame(bytes: ByteArray) {
-        val conn = remoteConn ?: return
+    private suspend fun handleRemoteFrame(conn: Conn, bytes: ByteArray) {
+        if (conn !== remoteConn) return
         logFrame("Received", bytes)
         val message = try {
             RemoteMessage.parseFrom(bytes)
@@ -681,14 +693,20 @@ class RemoteSessionManager(private val context: Context) {
         }
     }
 
-    /** Marks [conn] closed first, then closes the socket, so the reader loop doesn't report it as a failure. */
+    /**
+     * Marks [conn] closed first, so the reader loop doesn't report the close as a failure, then
+     * closes the socket on the IO scope: closing a TLS socket writes to the network, which must
+     * not happen on the caller's (often the main) thread.
+     */
     private fun closeConn(conn: Conn?) {
         if (conn == null || conn.closed) return
         conn.closed = true
-        try {
-            conn.socket.close()
-        } catch (e: Exception) {
-            Log.w(TAG, "Error while closing socket", e)
+        scope.launch {
+            try {
+                conn.socket.close()
+            } catch (e: Exception) {
+                Log.w(TAG, "Error while closing socket", e)
+            }
         }
     }
 

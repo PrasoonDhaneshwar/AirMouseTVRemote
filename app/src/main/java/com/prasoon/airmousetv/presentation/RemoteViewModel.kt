@@ -29,7 +29,6 @@ import kotlinx.coroutines.launch
 import javax.inject.Inject
 
 private const val TAG = "RemoteViewModel"
-/** How many times a dropped session is retried before giving up and returning to discovery. */
 /** How long a scan shows as "scanning" before it settles into found / nothing found. */
 private const val SCAN_WINDOW_MS = 8000L
 
@@ -41,6 +40,7 @@ private const val LIVENESS_INTERVAL_MS = 5000L
 /** Consecutive failed checks before a TV is dropped from the list; one miss can be a dropped packet. */
 private const val LIVENESS_MAX_MISSES = 2
 
+/** How many times a dropped session is retried before giving up and returning to discovery. */
 private const val MAX_RECONNECT_ATTEMPTS = 4
 /** Wait before the first retry; doubles on each attempt. */
 private const val RECONNECT_BASE_DELAY_MS = 1000L
@@ -61,6 +61,8 @@ class RemoteViewModel @Inject constructor(
     /** Collects the repository's TV list into [uiState]; replaced on each discovery restart. */
     private var tvCollectorJob: Job? = null  // Track the collector
     private var scanTimeoutJob: Job? = null
+    /** The refresh button's restart-and-wait sequence; cancelled when discovery is stopped. */
+    private var refreshJob: Job? = null
     private var livenessJob: Job? = null
     private var pairingWatchJob: Job? = null
     private var discoveryRunning = false
@@ -212,7 +214,7 @@ class RemoteViewModel @Inject constructor(
 
     fun retryDiscovery() {
         if (_uiState.value.isRefreshing) return
-        viewModelScope.launch {
+        refreshJob = viewModelScope.launch {
             _uiState.value = _uiState.value.copy(isRefreshing = true, isDiscovering = true, error = null)
             try {
                 // Force repository clean restart, forgetting TVs found earlier: NSD does not always report a TV
@@ -236,6 +238,8 @@ class RemoteViewModel @Inject constructor(
 
     fun stopDiscovery() {
         discoveryRunning = false
+        // A refresh still waiting would otherwise restart discovery after the user has left the list
+        refreshJob?.cancel()
         scanTimeoutJob?.cancel()
         livenessJob?.cancel()
         repository.stopDiscovery()
