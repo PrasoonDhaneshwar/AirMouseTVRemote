@@ -3,7 +3,8 @@ package com.prasoon.airmousetv.data.repository
 import android.os.SystemClock
 import android.util.Log
 import com.prasoon.airmousetv.data.api.KeyPayloadFactory
-import com.prasoon.airmousetv.data.api.TextKeyMapper
+import com.prasoon.airmousetv.data.api.planKeyPressEdit
+import com.prasoon.airmousetv.data.api.planTextEdit
 import com.prasoon.airmousetv.proto.remote.RemoteKeyCode
 import com.prasoon.airmousetv.data.model.DiscoveredTv
 import com.prasoon.airmousetv.data.model.KeyAction
@@ -11,6 +12,7 @@ import com.prasoon.airmousetv.data.model.TvKey
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -20,6 +22,7 @@ import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.withContext
 import java.util.concurrent.ConcurrentHashMap
 import javax.inject.Inject
 import javax.inject.Singleton
@@ -190,7 +193,7 @@ class RemoteRepository @Inject constructor(
     private val typingLock = Mutex()
 
     /** When the last text edit was sent, on the [SystemClock.elapsedRealtime] clock. */
-    private var lastEditAt = 0L
+    @Volatile private var lastEditAt = 0L
 
     /** Waits until at least [EDIT_GAP_MS] have passed since the last text edit. */
     suspend fun awaitEditSlot() {
@@ -204,7 +207,9 @@ class RemoteRepository @Inject constructor(
      *
      * With a text input session open the edit goes through it (see [typeAsText]). Otherwise the
      * difference is typed as key presses: backspaces over what changed at the end, then the new
-     * characters, paced by [KEY_GAP_MS] so slow or older TVs don't drop keys. Returns the characters that couldn't be typed as key presses and were skipped.
+     * characters, paced by [KEY_GAP_MS] so slow or older TVs don't drop keys. Characters that can't
+     * be typed as key presses are skipped and returned; they never reach the TV, so they don't
+     * count when working out what to delete next time (see [planKeyPressEdit]).
      */
     suspend fun typeEdit(previous: String, current: String): List<Char> =
         typingLock.withLock {
@@ -213,26 +218,28 @@ class RemoteRepository @Inject constructor(
                 return@withLock emptyList()
             }
 
-            val common = previous.commonPrefixWith(current).length
-            session.note("no text session: typing ${current.length - common} chars as key presses")
-            repeat(previous.length - common) {
+            val plan = planKeyPressEdit(previous, current)
+            session.note("no text session: typing ${plan.strokes.size} chars as key presses")
+            repeat(plan.deleteCount) {
                 session.send(KeyPayloadFactory.keyCode(RemoteKeyCode.KEYCODE_DEL))
                 delay(KEY_GAP_MS)
             }
 
-            val skipped = mutableListOf<Char>()
-            for (c in current.substring(common)) {
-                val stroke = TextKeyMapper.toStroke(c)
-                if (stroke == null) {
-                    skipped += c
-                    continue
-                }
+            for (stroke in plan.strokes) {
                 if (stroke.shift) session.send(KeyPayloadFactory.keyCode(RemoteKeyCode.KEYCODE_SHIFT_LEFT, KeyAction.LONG_START))
-                session.send(KeyPayloadFactory.keyCode(stroke.code))
-                if (stroke.shift) session.send(KeyPayloadFactory.keyCode(RemoteKeyCode.KEYCODE_SHIFT_LEFT, KeyAction.LONG_END))
+                try {
+                    session.send(KeyPayloadFactory.keyCode(stroke.code))
+                } finally {
+                    // Always let go of Shift, even if the key press failed or was cancelled, or the TV keeps it held
+                    if (stroke.shift) {
+                        withContext(NonCancellable) {
+                            session.send(KeyPayloadFactory.keyCode(RemoteKeyCode.KEYCODE_SHIFT_LEFT, KeyAction.LONG_END))
+                        }
+                    }
+                }
                 delay(KEY_GAP_MS)
             }
-            skipped
+            plan.skipped
         }
 
     /**
@@ -245,19 +252,16 @@ class RemoteRepository @Inject constructor(
      * "why" then "why " then "why h" go out as "why", "why " and "h".
      */
     private suspend fun typeAsText(previous: String, current: String) {
-        val common = previous.commonPrefixWith(current).length
-        val deleted = previous.length - common
-        if (deleted > 0) {
-            session.deleteText(deleted)
+        val plan = planTextEdit(previous, current)
+        val deleteCount = plan.sessionDeleteCount
+        if (deleteCount > 0) {
+            session.deleteText(deleteCount)
             lastEditAt = SystemClock.elapsedRealtime()
         }
-        if (current.length > common) {
-            if (deleted > 0) awaitEditSlot()
-            session.sendText(current.substring(wordStart(current.substring(0, common))))
+        if (plan.newChars.isNotEmpty()) {
+            if (deleteCount > 0) awaitEditSlot()
+            session.sendText(plan.replacement)
             lastEditAt = SystemClock.elapsedRealtime()
         }
     }
-
-    /** Index where the last whitespace-delimited word of [text] starts. */
-    private fun wordStart(text: String): Int = text.indexOfLast { it.isWhitespace() } + 1
 }

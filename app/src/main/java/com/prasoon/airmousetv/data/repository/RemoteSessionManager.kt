@@ -612,7 +612,7 @@ class RemoteSessionManager(private val context: Context) {
             }
             message.hasRemoteImeShowRequest() -> message.remoteImeShowRequest.let {
                 // Also sent after every edit we make, with the field's full text, so it isn't a focus signal
-                Log.d(TAG, "ImeShowRequest: field=${it.remoteTextFieldStatus.counterField}")
+                Log.d(TAG, "ImeShowRequest: field=${it.remoteTextFieldStatus.counterField} len=${it.remoteTextFieldStatus.value.length}")
                 // Only the length: the field can hold a password or other private text
                 note("ImeShowRequest (${it.remoteTextFieldStatus.value.length} chars)")
                 updateIme(it.remoteTextFieldStatus, focused = false)
@@ -643,7 +643,9 @@ class RemoteSessionManager(private val context: Context) {
             (old ?: ImeField()).copy(
                 label = status.label,
                 value = status.value,
-                showRequests = (old?.showRequests ?: 0) + if (focused) 1 else 0
+                showRequests = (old?.showRequests ?: 0) + if (focused) 1 else 0,
+                reports = (old?.reports ?: 0) + 1,
+                focuses = (old?.focuses ?: 0) + if (focused) 1 else 0
             )
         }
     }

@@ -4,7 +4,9 @@ import android.util.Log
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.prasoon.airmousetv.data.model.ConnectionState
+import com.prasoon.airmousetv.data.api.mismatchSize
 import com.prasoon.airmousetv.data.model.DiscoveredTv
+import com.prasoon.airmousetv.data.model.reportedMismatch
 import com.prasoon.airmousetv.data.model.KeyAction
 import com.prasoon.airmousetv.data.model.RemoteMode
 import com.prasoon.airmousetv.data.model.RemoteUiState
@@ -14,6 +16,7 @@ import com.prasoon.airmousetv.data.repository.RemoteRepository
 import com.prasoon.airmousetv.data.repository.RemoteSessionManager
 import com.prasoon.airmousetv.data.repository.TvUnreachableException
 import dagger.hilt.android.lifecycle.HiltViewModel
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
@@ -39,6 +42,13 @@ private const val PAIRING_RESPONSE_TIMEOUT_MS = 15_000L
 private const val LIVENESS_INTERVAL_MS = 5000L
 /** Consecutive failed checks before a TV is dropped from the list; one miss can be a dropped packet. */
 private const val LIVENESS_MAX_MISSES = 2
+
+/** How long to wait for the TV to report its text after an edit; it normally does within a few hundred ms. */
+private const val TV_REPORT_TIMEOUT_MS = 1000L
+/** Corrective edits in a row before the TV's text is accepted as it is. */
+private const val MAX_TEXT_CORRECTIONS = 4
+/** How long typing must pause before the TV's text is checked once more for changes it made by itself. */
+private const val TEXT_SETTLE_DELAY_MS = 1500L
 
 /** How many times a dropped session is retried before giving up and returning to discovery. */
 private const val MAX_RECONNECT_ATTEMPTS = 4
@@ -69,6 +79,9 @@ class RemoteViewModel @Inject constructor(
 
     /** Text entry actions waiting to be applied by [launchTextWorker]. */
     private val textActions = Channel<TextAction>(Channel.UNLIMITED)
+
+    /** The text the user wants on the TV right now, the newest one given to [typeText] or [beginTextEntry]. */
+    private var wantedText = ""
 
     /** Retry loop for a dropped session; non-null/active means we are reconnecting. */
     private var reconnectJob: Job? = null
@@ -433,11 +446,13 @@ class RemoteViewModel @Inject constructor(
 
     /** Starts a text entry session whose field already shows [initial] on the TV. */
     fun beginTextEntry(initial: String) {
+        wantedText = initial
         textActions.trySend(TextAction.Begin(initial))
     }
 
     /** Makes the TV's focused text field show [text]; edits made in quick succession are merged. */
     fun typeText(text: String) {
+        wantedText = text
         textActions.trySend(TextAction.Set(text))
     }
 
@@ -466,13 +481,59 @@ class RemoteViewModel @Inject constructor(
      * times a second, and only the final text matters, so intermediate states are never sent. The
      * merging happens after waiting for the repository's edit slot, so slow sends merge more.
      * Characters the remote can't type are reported through [RemoteUiState.error].
+     *
+     * The TV doesn't always apply an edit as planned, and it reports its field's text back after
+     * each one. So after an edit through the text input session the worker compares that report
+     * with what it meant to send. If they differ, the TV's own text becomes the baseline for the
+     * next edit and the latest wanted text is sent again, up to [MAX_TEXT_CORRECTIONS] times in a
+     * row, so a TV that rewrites the text (or can never match it) doesn't cause an endless loop.
+     * The TV can also change its text on its own a moment later, so once typing has paused for
+     * [TEXT_SETTLE_DELAY_MS] the worker checks the TV's latest report once more.
      */
     private fun launchTextWorker() {
         viewModelScope.launch {
             var tvText = ""
+            var corrections = 0
+            var lastGap = 0  // how far the TV's text was from the wanted text before the last correction
+            var settleCheckDue = false
+            var settleFocuses = 0  // how many fields had taken focus when the last edit was made
             var carried: TextAction? = null
+
+            /** The TV shows [actual] instead of what was sent: trust it as the baseline and, if it isn't what the user wants, send that again. */
+            fun onTvTextDiffers(actual: String) {
+                Log.w(TAG, "TV text differs from what was sent: ${actual.length} chars, expected ${tvText.length}")
+                remoteSession.note("TV text differs (${actual.length} chars, expected ${tvText.length})")
+                tvText = actual
+                // A correction must bring the TV closer to the wanted text; if it didn't, the TV isn't
+                // taking the edits and more of them would only pile more text on it
+                val gap = mismatchSize(actual, wantedText)
+                val improving = corrections == 0 || gap < lastGap
+                lastGap = gap
+                if (improving && corrections++ < MAX_TEXT_CORRECTIONS && gap > 0) {
+                    textActions.trySend(TextAction.Set(wantedText))
+                } else {
+                    corrections = 0
+                }
+            }
+
             while (true) {
-                var action = carried ?: textActions.receive()
+                val first = carried
+                    ?: if (settleCheckDue) withTimeoutOrNull(TEXT_SETTLE_DELAY_MS) { textActions.receive() } else textActions.receive()
+                if (first == null) {
+                    // Typing paused: has the TV changed its text since the last edit, without being asked?
+                    // Not if another field has taken focus since, whose text has nothing to do with ours.
+                    settleCheckDue = false
+                    val reported = remoteSession.imeField.value
+                    when {
+                        !remoteSession.hasTextSession || reported == null ->
+                            Log.d(TAG, "Settle check skipped: no text session")
+                        reported.focuses != settleFocuses ->
+                            Log.d(TAG, "Settle check skipped: another field took focus")
+                        reported.value != tvText -> onTvTextDiffers(reported.value)
+                    }
+                    continue
+                }
+                var action: TextAction = first
                 carried = null
                 if (action is TextAction.Set) {
                     // Edits can't be sent faster than the TV copes with, so let more pile up first
@@ -484,22 +545,47 @@ class RemoteViewModel @Inject constructor(
                 }
                 try {
                     when (action) {
-                        is TextAction.Begin -> tvText = action.initial
+                        is TextAction.Begin -> {
+                            tvText = action.initial
+                            corrections = 0
+                            settleCheckDue = false
+                        }
                         is TextAction.Set -> {
+                            val reportsBefore = remoteSession.imeField.value?.reports ?: 0
                             val skipped = repository.typeEdit(tvText, action.text)
                             tvText = action.text
                             if (skipped.isNotEmpty()) {
                                 _uiState.value = _uiState.value.copy(error = "Can't type: ${skipped.distinct().joinToString(" ")}")
                             }
+                            if (remoteSession.hasTextSession) {
+                                settleCheckDue = true
+                                settleFocuses = remoteSession.imeField.value?.focuses ?: 0
+                                val actual = awaitReportedMismatch(action.text, reportsBefore)
+                                if (actual == null) corrections = 0 else onTvTextDiffers(actual)
+                            }
                         }
-                        TextAction.Enter -> repository.sendKey(TvKey.ENTER)
+                        TextAction.Enter -> {
+                            settleCheckDue = false  // the TV moves on after Enter; its next text isn't ours to correct
+                            repository.sendKey(TvKey.ENTER)
+                        }
                     }
+                } catch (e: CancellationException) {
+                    throw e  // the ViewModel is going away; not a send failure
                 } catch (e: Exception) {
                     Log.e(TAG, "text action failed", e)
                     _uiState.value = _uiState.value.copy(error = "Send failed: ${e.message}")
                 }
             }
         }
+    }
+
+    /**
+     * Waits briefly for the TV to report its field's text as [expected] after an edit. Returns the
+     * text it reports instead if that differs, or null if it matches or the TV reported nothing.
+     */
+    private suspend fun awaitReportedMismatch(expected: String, reportsBefore: Int): String? {
+        withTimeoutOrNull(TV_REPORT_TIMEOUT_MS) { remoteSession.imeField.first { it?.value == expected } }
+        return remoteSession.imeField.value.reportedMismatch(expected, reportsBefore)
     }
 
     /** Sends one key tap; failures are surfaced through [RemoteUiState.error]. */

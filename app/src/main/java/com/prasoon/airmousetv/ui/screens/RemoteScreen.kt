@@ -80,7 +80,9 @@ import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.role
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.AnnotatedString
+import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
@@ -428,12 +430,17 @@ private fun RemoteContent(
 private fun TextEntryDialog(viewModel: RemoteViewModel, onDismiss: () -> Unit) {
     val uiState by viewModel.uiState.collectAsState()
     val field = uiState.imeField
-    var text by remember { mutableStateOf(field?.value.orEmpty()) }
+    // The TV puts its cursor at the end of the text it already holds, and edits are made relative to
+    // that, so the dialog starts with its own cursor at the end too (a plain string would start it at the front)
+    var value by remember {
+        val initial = field?.value.orEmpty()
+        mutableStateOf(TextFieldValue(initial, selection = TextRange(initial.length)))
+    }
     val focusRequester = remember { FocusRequester() }
 
     // Wait for the field to be laid out before asking for focus, or there is nothing to focus yet
     LaunchedEffect(Unit) {
-        viewModel.beginTextEntry(text)
+        viewModel.beginTextEntry(value.text)
         // A focused text box that hasn't opened the TV's keyboard yet (e.g. SmartTube's search the first
         // time) takes no text edits. Pressing OK on it opens the keyboard, and the text session follows.
         if (field != null && !field.acceptsText) viewModel.sendKey(TvKey.OK)
@@ -443,11 +450,13 @@ private fun TextEntryDialog(viewModel: RemoteViewModel, onDismiss: () -> Unit) {
 
     TextEntryDialogContent(
         title = field?.label?.takeIf { it.isNotBlank() } ?: "Type on TV",
-        text = text,
-        onTextChange = {
-            text = it
-            // With no text box on the TV, letters sent as key presses go nowhere (or trigger shortcuts)
-            if (field != null) viewModel.typeText(it)
+        value = value,
+        onValueChange = { new ->
+            val textChanged = new.text != value.text
+            value = new
+            // Moving the cursor changes nothing on the TV. With no text box on the TV, letters sent
+            // as key presses go nowhere (or trigger shortcuts)
+            if (textChanged && field != null) viewModel.typeText(new.text)
         },
         acceptsText = field?.acceptsText == true,
         focusRequester = focusRequester,
@@ -466,8 +475,8 @@ private fun TextEntryDialog(viewModel: RemoteViewModel, onDismiss: () -> Unit) {
 @Composable
 private fun TextEntryDialogContent(
     title: String,
-    text: String,
-    onTextChange: (String) -> Unit,
+    value: TextFieldValue,
+    onValueChange: (TextFieldValue) -> Unit,
     acceptsText: Boolean,
     focusRequester: FocusRequester,
     onEnter: () -> Unit,
@@ -479,8 +488,8 @@ private fun TextEntryDialogContent(
         text = {
             Column {
                 OutlinedTextField(
-                    value = text,
-                    onValueChange = onTextChange,
+                    value = value,
+                    onValueChange = onValueChange,
                     modifier = Modifier.fillMaxWidth().focusRequester(focusRequester),
                     keyboardOptions = KeyboardOptions(imeAction = ImeAction.Send),
                     keyboardActions = KeyboardActions(onSend = { onEnter() })
@@ -747,7 +756,7 @@ private fun RemoteReconnectingPreview() {
 @Composable
 private fun TextEntryKeyFallbackPreview() {
     AirMouseTVRemoteTheme {
-        TextEntryDialogContent("Search", "hello", {}, acceptsText = false, FocusRequester(), {}, {})
+        TextEntryDialogContent("Search", TextFieldValue("hello"), {}, acceptsText = false, FocusRequester(), {}, {})
     }
 }
 
@@ -755,7 +764,7 @@ private fun TextEntryKeyFallbackPreview() {
 @Composable
 private fun TextEntrySessionPreview() {
     AirMouseTVRemoteTheme {
-        TextEntryDialogContent("Search", "hello", {}, acceptsText = true, FocusRequester(), {}, {})
+        TextEntryDialogContent("Search", TextFieldValue("hello"), {}, acceptsText = true, FocusRequester(), {}, {})
     }
 }
 
