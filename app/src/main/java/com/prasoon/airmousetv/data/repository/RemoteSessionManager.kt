@@ -6,6 +6,7 @@ import android.util.Log
 import com.prasoon.airmousetv.data.api.FrameCodec
 import com.prasoon.airmousetv.data.api.KeyPayloadFactory
 import com.prasoon.airmousetv.data.api.PairingPayloadFactory
+import com.prasoon.airmousetv.data.api.computePairingSecret
 import com.prasoon.airmousetv.data.api.proto.RemoteMessageEncoder
 import com.prasoon.airmousetv.data.model.ConnectionState
 import com.prasoon.airmousetv.data.model.ImeField
@@ -41,10 +42,10 @@ import java.net.InetSocketAddress
 import java.net.Socket
 import java.security.KeyPairGenerator
 import java.security.KeyStore
-import java.security.MessageDigest
 import java.security.Principal
 import java.security.PrivateKey
 import java.security.SecureRandom
+import java.security.cert.CertificateException
 import java.security.cert.X509Certificate
 import java.security.interfaces.RSAPublicKey
 import java.util.Date
@@ -166,6 +167,13 @@ class RemoteSessionManager(private val context: Context) {
     /** Our certificate and private key, loaded or created on first use. */
     private val clientIdentity: Pair<X509Certificate, PrivateKey> by lazy { loadOrCreateClientIdentity() }
 
+    /** The TV certificate seen on the remote port, per address, so a different device at that address is refused. */
+    private val pinStore by lazy {
+        CertPinStore(context.getSharedPreferences("tv_cert_pins", Context.MODE_PRIVATE))
+    }
+
+    private fun pinKey(host: String) = "$host:$REMOTE_PORT"
+
     /**
      * Connects to the TV. If the TV already trusts our saved certificate the remote session on
      * 6466 comes up immediately; otherwise it drops us and we fall back to Polo pairing.
@@ -286,7 +294,12 @@ class RemoteSessionManager(private val context: Context) {
             Log.d(TAG, "Connecting to $host:$port with TLS")
             val (clientCert, privateKey) = clientIdentity
 
-            val socket = createSslContext(clientCert, privateKey).socketFactory.createSocket() as SSLSocket
+            // Pairing (6467) trusts whatever answers, since the code proves the TV. The remote port must
+            // keep presenting the certificate it first showed.
+            val sslContext = createSslContext(clientCert, privateKey) { chain ->
+                if (port == REMOTE_PORT) verifyPinnedCert(host, chain)
+            }
+            val socket = sslContext.socketFactory.createSocket() as SSLSocket
             socket.useClientMode = true
             socket.keepAlive = true
             socket.tcpNoDelay = true
@@ -355,12 +368,28 @@ class RemoteSessionManager(private val context: Context) {
         return cert to keyPair.private
     }
 
-    /** Builds a TLS context that presents [clientCert] and accepts the TV's self-signed certificate. */
-    private fun createSslContext(clientCert: X509Certificate, privateKey: PrivateKey): SSLContext {
-        // The TV uses a self-signed cert; trust is established by the pairing code instead
-        val trustAll = object : X509TrustManager {
+    /** Throws unless the TV at [host] presents the same certificate as the first time it was seen on the remote port. */
+    private fun verifyPinnedCert(host: String, chain: Array<X509Certificate>?) {
+        val leaf = chain?.firstOrNull() ?: throw CertificateException("TV sent no certificate")
+        if (!pinStore.verifyOrRemember(pinKey(host), CertPinStore.fingerprint(leaf))) {
+            note("TV certificate at $host changed, refusing the connection")
+            throw CertificateException("The certificate of the device at $host is not the one it paired with")
+        }
+    }
+
+    /**
+     * Builds a TLS context that presents [clientCert] and accepts the TV's self-signed certificate,
+     * after [checkServer] has looked at it (it throws to refuse the connection).
+     */
+    private fun createSslContext(
+        clientCert: X509Certificate,
+        privateKey: PrivateKey,
+        checkServer: (Array<X509Certificate>?) -> Unit
+    ): SSLContext {
+        // The TV uses a self-signed cert, so there is no CA chain to validate; callers pin it instead
+        val serverTrust = object : X509TrustManager {
             override fun checkClientTrusted(chain: Array<X509Certificate>?, authType: String?) {}
-            override fun checkServerTrusted(chain: Array<X509Certificate>?, authType: String?) {}
+            override fun checkServerTrusted(chain: Array<X509Certificate>?, authType: String?) = checkServer(chain)
             override fun getAcceptedIssuers(): Array<X509Certificate> = emptyArray()
         }
 
@@ -376,7 +405,7 @@ class RemoteSessionManager(private val context: Context) {
         }
 
         return SSLContext.getInstance("TLS").apply {
-            init(arrayOf(keyManager), arrayOf(trustAll), SecureRandom())
+            init(arrayOf(keyManager), arrayOf(serverTrust), SecureRandom())
         }
     }
 
@@ -479,6 +508,8 @@ class RemoteSessionManager(private val context: Context) {
                 phase = Phase.PAIRED
                 closeConn(conn)
                 pairingConn = null
+                // A TV that is paired afresh may present a new certificate; learn it on the next remote connection
+                host?.let { pinStore.forget(pinKey(it)) }
                 scope.launch { startRemoteSession() }
             }
             else -> Log.w(TAG, "Unexpected Polo message in phase $phase")
@@ -502,34 +533,14 @@ class RemoteSessionManager(private val context: Context) {
         }
         val clientKey = clientIdentity.first.publicKey as RSAPublicKey
 
-        val secret = computeSecret(code.uppercase(), clientKey, serverKey)
+        val secret = computePairingSecret(code, clientKey, serverKey)
         if (secret == null) {
+            Log.w(TAG, "Pairing code rejected locally (length, characters or checksum)")
             _connectionState.value = ConnectionState.Error("Wrong pairing code")
             return
         }
         phase = Phase.AWAIT_SECRET_ACK
         send(PairingPayloadFactory.createSecret(secret), conn)
-    }
-
-    /**
-     * SHA-256(client modulus, client exponent, server modulus, server exponent, code[2..6] as bytes).
-     * The first byte of the hash must equal code[0..2], which lets us reject typos locally.
-     */
-    private fun computeSecret(code: String, client: RSAPublicKey, server: RSAPublicKey): ByteArray? {
-        if (code.length != 6 || !code.all { it in '0'..'9' || it in 'A'..'F' }) return null
-        val digest = MessageDigest.getInstance("SHA-256").run {
-            update(client.modulus.unsignedBytes())
-            update(client.publicExponent.unsignedBytes())
-            update(server.modulus.unsignedBytes())
-            update(server.publicExponent.unsignedBytes())
-            update(code.substring(2).chunked(2).map { it.toInt(16).toByte() }.toByteArray())
-            digest()
-        }
-        if (digest[0] != code.substring(0, 2).toInt(16).toByte()) {
-            Log.w(TAG, "Code checksum mismatch")
-            return null
-        }
-        return digest
     }
 
     // ---------------- Remote control (port 6466) ----------------
@@ -590,7 +601,8 @@ class RemoteSessionManager(private val context: Context) {
             message.hasRemoteImeShowRequest() -> message.remoteImeShowRequest.let {
                 // Also sent after every edit we make, with the field's full text, so it isn't a focus signal
                 Log.d(TAG, "ImeShowRequest: field=${it.remoteTextFieldStatus.counterField}")
-                note("ImeShowRequest value=\"${it.remoteTextFieldStatus.value}\"")
+                // Only the length: the field can hold a password or other private text
+                note("ImeShowRequest (${it.remoteTextFieldStatus.value.length} chars)")
                 updateIme(it.remoteTextFieldStatus, focused = false)
             }
             message.hasRemoteImeBatchEdit() -> message.remoteImeBatchEdit.let { edit ->
@@ -645,7 +657,7 @@ class RemoteSessionManager(private val context: Context) {
      */
     suspend fun launchLink(link: String): Boolean {
         if (activeFeatures and APP_LINK_FEATURE == 0) return false
-        note("opening link on TV: $link")
+        note("opening a link on the TV")
         send(KeyPayloadFactory.appLink(link))
         return true
     }
@@ -660,10 +672,6 @@ class RemoteSessionManager(private val context: Context) {
         send(KeyPayloadFactory.textDelete(count))
         return true
     }
-
-    /** Big-endian bytes without the sign byte Java adds, which is what the secret's hash is computed over. */
-    private fun BigInteger.unsignedBytes(): ByteArray =
-        toByteArray().let { if (it.size > 1 && it[0] == 0.toByte()) it.copyOfRange(1, it.size) else it }
 
     private fun logFrame(direction: String, bytes: ByteArray) {
         if (debuggable) {

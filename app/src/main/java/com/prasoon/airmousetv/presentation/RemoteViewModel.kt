@@ -390,8 +390,7 @@ class RemoteViewModel @Inject constructor(
 
         viewModelScope.launch {
             remoteSession.submitPairingCode(code)
-            Log.d(TAG, "Submitted pairing code: $code")
-    }
+        }
     }
 
 
