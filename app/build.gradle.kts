@@ -42,6 +42,10 @@ android {
     buildFeatures {
         compose = true
     }
+    testOptions {
+        // android.util.Log calls in the encoders become no-ops instead of throwing in JVM unit tests
+        unitTests.isReturnDefaultValues = true
+    }
 }
 
 protobuf {
