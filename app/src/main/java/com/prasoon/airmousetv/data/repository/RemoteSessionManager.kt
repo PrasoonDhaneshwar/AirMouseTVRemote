@@ -4,8 +4,6 @@ import android.content.Context
 import android.content.pm.ApplicationInfo
 import android.util.Log
 import com.prasoon.airmousetv.data.api.FrameCodec
-import com.prasoon.airmousetv.data.api.KeyPayloadFactory
-import com.prasoon.airmousetv.data.api.PairingPayloadFactory
 import com.prasoon.airmousetv.data.api.computePairingSecret
 import com.prasoon.airmousetv.data.api.proto.RemoteMessageEncoder
 import com.prasoon.airmousetv.data.model.ConnectionState
@@ -271,7 +269,7 @@ class RemoteSessionManager @Inject constructor(
         serverCert = conn.socket.session.peerCertificates.firstOrNull() as? X509Certificate
 
         phase = Phase.AWAIT_REQUEST_ACK
-        send(PairingPayloadFactory.createPairingRequest(clientName), conn)
+        send(RemoteMessageEncoder.encodePairingRequest(clientName), conn)
 
         startReaderLoop(conn) { handlePoloFrame(conn, it) }
     }
@@ -507,12 +505,12 @@ class RemoteSessionManager @Inject constructor(
             message.hasPairingRequestAck() && phase == Phase.AWAIT_REQUEST_ACK -> {
                 Log.d(TAG, "PairingRequestAck from '${message.pairingRequestAck.serverName}'")
                 phase = Phase.AWAIT_OPTIONS
-                send(PairingPayloadFactory.createOptions(), conn)
+                send(RemoteMessageEncoder.encodeOptions(), conn)
             }
             message.hasOptions() && phase == Phase.AWAIT_OPTIONS -> {
                 Log.d(TAG, "Server Options received, sending Configuration")
                 phase = Phase.AWAIT_CONFIG_ACK
-                send(PairingPayloadFactory.createConfiguration(), conn)
+                send(RemoteMessageEncoder.encodeConfiguration(), conn)
             }
             message.hasConfigurationAck() && phase == Phase.AWAIT_CONFIG_ACK -> {
                 Log.d(TAG, "ConfigurationAck received - TV should now display the pairing code")
@@ -556,7 +554,7 @@ class RemoteSessionManager @Inject constructor(
             return
         }
         phase = Phase.AWAIT_SECRET_ACK
-        send(PairingPayloadFactory.createSecret(secret), conn)
+        send(RemoteMessageEncoder.encodeSecret(secret), conn)
     }
 
     // ---------------- Remote control (port 6466) ----------------
@@ -665,7 +663,7 @@ class RemoteSessionManager @Inject constructor(
         if (!hasTextSession) return false
         Log.d(TAG, "sendText len=${text.length}")
         note("sent text edit (${text.length} chars)")
-        send(KeyPayloadFactory.textEdit(text))
+        send(RemoteMessageEncoder.encodeTextEdit(text))
         return true
     }
 
@@ -676,7 +674,7 @@ class RemoteSessionManager @Inject constructor(
     suspend fun launchLink(link: String): Boolean {
         if (activeFeatures and APP_LINK_FEATURE == 0) return false
         note("opening a link on the TV")
-        send(KeyPayloadFactory.appLink(link))
+        send(RemoteMessageEncoder.encodeAppLink(link))
         return true
     }
 
@@ -687,7 +685,7 @@ class RemoteSessionManager @Inject constructor(
     suspend fun deleteText(count: Int): Boolean {
         if (!hasTextSession) return false
         Log.d(TAG, "deleteText count=$count")
-        send(KeyPayloadFactory.textDelete(count))
+        send(RemoteMessageEncoder.encodeTextDelete(count))
         return true
     }
 

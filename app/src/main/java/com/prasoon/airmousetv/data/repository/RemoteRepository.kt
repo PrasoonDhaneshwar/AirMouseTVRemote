@@ -2,9 +2,9 @@ package com.prasoon.airmousetv.data.repository
 
 import android.os.SystemClock
 import android.util.Log
-import com.prasoon.airmousetv.data.api.KeyPayloadFactory
 import com.prasoon.airmousetv.data.api.planKeyPressEdit
 import com.prasoon.airmousetv.data.api.planTextEdit
+import com.prasoon.airmousetv.data.api.proto.RemoteMessageEncoder
 import com.prasoon.airmousetv.proto.remote.RemoteKeyCode
 import com.prasoon.airmousetv.data.model.DiscoveredTv
 import com.prasoon.airmousetv.data.model.KeyAction
@@ -165,7 +165,7 @@ class RemoteRepository @Inject constructor(
 
     /** Sends one key tap to the TV over the active remote session. */
     suspend fun sendKey(key: TvKey, action: KeyAction = KeyAction.TAP) {
-        session.send(KeyPayloadFactory.keyPress(key, action))
+        session.send(RemoteMessageEncoder.encodeKeyPress(key, action))
     }
 
     /** Package of the app in front on the TV; null until it has reported one. */
@@ -220,19 +220,19 @@ class RemoteRepository @Inject constructor(
             val plan = planKeyPressEdit(previous, current)
             session.note("no text session: typing ${plan.strokes.size} chars as key presses")
             repeat(plan.deleteCount) {
-                session.send(KeyPayloadFactory.keyCode(RemoteKeyCode.KEYCODE_DEL))
+                session.send(RemoteMessageEncoder.encodeKeyCode(RemoteKeyCode.KEYCODE_DEL))
                 delay(KEY_GAP_MS)
             }
 
             for (stroke in plan.strokes) {
-                if (stroke.shift) session.send(KeyPayloadFactory.keyCode(RemoteKeyCode.KEYCODE_SHIFT_LEFT, KeyAction.LONG_START))
+                if (stroke.shift) session.send(RemoteMessageEncoder.encodeKeyCode(RemoteKeyCode.KEYCODE_SHIFT_LEFT, KeyAction.LONG_START))
                 try {
-                    session.send(KeyPayloadFactory.keyCode(stroke.code))
+                    session.send(RemoteMessageEncoder.encodeKeyCode(stroke.code))
                 } finally {
                     // Always let go of Shift, even if the key press failed or was cancelled, or the TV keeps it held
                     if (stroke.shift) {
                         withContext(NonCancellable) {
-                            session.send(KeyPayloadFactory.keyCode(RemoteKeyCode.KEYCODE_SHIFT_LEFT, KeyAction.LONG_END))
+                            session.send(RemoteMessageEncoder.encodeKeyCode(RemoteKeyCode.KEYCODE_SHIFT_LEFT, KeyAction.LONG_END))
                         }
                     }
                 }
