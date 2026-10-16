@@ -196,6 +196,15 @@ private fun DiscoveryContent(
 /** A pulsing dot while busy; a steady one, in [color], once done. */
 @Composable
 private fun ScanIndicator(active: Boolean, color: Color) {
+    Box(modifier = Modifier.size(72.dp), contentAlignment = Alignment.Center) {
+        if (active) PulsingRing(color)
+        Box(Modifier.size(16.dp).background(color, CircleShape))
+    }
+}
+
+/** The expanding, fading ring around the dot. Its animation only exists while it is on screen. */
+@Composable
+private fun PulsingRing(color: Color) {
     val transition = rememberInfiniteTransition(label = "scan")
     val pulse by transition.animateFloat(
         initialValue = 1f,
@@ -203,21 +212,28 @@ private fun ScanIndicator(active: Boolean, color: Color) {
         animationSpec = infiniteRepeatable(tween(1400, easing = LinearEasing), RepeatMode.Restart),
         label = "pulse"
     )
-    Box(modifier = Modifier.size(72.dp), contentAlignment = Alignment.Center) {
-        if (active) {
-            Box(
-                Modifier
-                    .size(16.dp)
-                    .graphicsLayer(scaleX = pulse, scaleY = pulse, alpha = (2.4f - pulse) / 1.4f * 0.5f)
-                    .background(color, CircleShape)
-            )
-        }
-        Box(Modifier.size(16.dp).background(color, CircleShape))
-    }
+    Box(
+        Modifier
+            .size(16.dp)
+            // The value is read inside the lambda, so each frame only redraws instead of recomposing
+            .graphicsLayer {
+                scaleX = pulse
+                scaleY = pulse
+                alpha = (2.4f - pulse) / 1.4f * 0.5f
+            }
+            .background(color, CircleShape)
+    )
 }
 
 @Composable
 private fun RefreshButton(spinning: Boolean, onClick: () -> Unit) {
+    IconButton(onClick = onClick, modifier = Modifier.size(40.dp)) {
+        if (spinning) SpinningRefreshIcon() else RefreshIcon()
+    }
+}
+
+@Composable
+private fun SpinningRefreshIcon() {
     val transition = rememberInfiniteTransition(label = "refresh")
     val spin by transition.animateFloat(
         initialValue = 0f,
@@ -225,14 +241,18 @@ private fun RefreshButton(spinning: Boolean, onClick: () -> Unit) {
         animationSpec = infiniteRepeatable(tween(1000, easing = LinearEasing), RepeatMode.Restart),
         label = "rotation"
     )
-    IconButton(onClick = onClick, modifier = Modifier.size(40.dp)) {
-        Icon(
-            Icons.Default.Refresh,
-            contentDescription = "Refresh scan",
-            tint = MaterialTheme.colorScheme.primary,
-            modifier = Modifier.size(20.dp).graphicsLayer(rotationZ = if (spinning) spin else 0f)
-        )
-    }
+    RefreshIcon(rotation = { spin })
+}
+
+/** The refresh icon turned by [rotation] degrees; the value is read when drawing, not when composing. */
+@Composable
+private fun RefreshIcon(rotation: () -> Float = { 0f }) {
+    Icon(
+        Icons.Default.Refresh,
+        contentDescription = "Refresh scan",
+        tint = MaterialTheme.colorScheme.primary,
+        modifier = Modifier.size(20.dp).graphicsLayer { rotationZ = rotation() }
+    )
 }
 
 @Composable
