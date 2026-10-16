@@ -8,22 +8,20 @@ import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
-import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
-import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowLeft
@@ -85,6 +83,7 @@ import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.tooling.preview.Preview
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import com.prasoon.airmousetv.data.model.KeyAction
 import com.prasoon.airmousetv.data.model.DiscoveredTv
@@ -159,7 +158,8 @@ private fun Header(
     reconnecting: Boolean,
     enabled: Boolean,
     onKey: (TvKey, KeyAction) -> Unit,
-    onCopyDiagnostics: () -> Unit
+    onCopyDiagnostics: () -> Unit,
+    onSwitchTv: () -> Unit
 ) {
     Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
         Column(modifier = Modifier.weight(1f)) {
@@ -181,19 +181,26 @@ private fun Header(
             shape = CircleShape,
             modifier = Modifier.size(44.dp)
         ) { KeyIcon(Icons.Default.PowerSettingsNew, "Power", tint = MaterialTheme.colorScheme.secondary) }
-        OverflowMenu(onCopyDiagnostics)
+        OverflowMenu(onCopyDiagnostics, onSwitchTv)
     }
 }
 
 /** The "⋮" menu in the header: things that are about the app and the TV connection, not the remote keys. */
 @Composable
-private fun OverflowMenu(onCopyDiagnostics: () -> Unit) {
+private fun OverflowMenu(onCopyDiagnostics: () -> Unit, onSwitchTv: () -> Unit) {
     var expanded by remember { mutableStateOf(false) }
     Box {
         IconButton(onClick = { expanded = true }) {
             Icon(Icons.Default.MoreVert, contentDescription = "More", tint = MaterialTheme.colorScheme.onSurfaceVariant)
         }
         DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
+            DropdownMenuItem(
+                text = { Text("Switch TV") },
+                onClick = {
+                    expanded = false
+                    onSwitchTv()
+                }
+            )
             DropdownMenuItem(
                 text = { Text("Copy diagnostics") },
                 onClick = {
@@ -243,31 +250,36 @@ private fun MediaButtons(onKey: (TvKey, KeyAction) -> Unit, enabled: Boolean) {
     }
 }
 
-/** Circular directional pad with OK in the middle. */
+/** The D-pad's full size; it is drawn smaller, with everything in proportion, when the screen is short. */
+private val DPAD_SIZE = 256.dp
+
+/** Circular directional pad with OK in the middle, [size] across. */
 @Composable
-private fun DPad(onKey: (TvKey, KeyAction) -> Unit, enabled: Boolean) {
+private fun DPad(onKey: (TvKey, KeyAction) -> Unit, enabled: Boolean, size: Dp = DPAD_SIZE) {
     val keyShape = MaterialTheme.shapes.medium
+    val scale = size / DPAD_SIZE
+    val edge = 16.dp * scale
     Box(
         modifier = Modifier
-            .size(256.dp)
+            .size(size)
             .clip(CircleShape)
             .background(MaterialTheme.colorScheme.surfaceVariant),
         contentAlignment = Alignment.Center
     ) {
-        RemoteKey(TvKey.UP, onKey, enabled, Modifier.align(Alignment.TopCenter).padding(top = 16.dp).size(64.dp, 56.dp), keyShape) {
+        RemoteKey(TvKey.UP, onKey, enabled, Modifier.align(Alignment.TopCenter).padding(top = edge).size(64.dp * scale, 56.dp * scale), keyShape) {
             KeyIcon(Icons.Default.KeyboardArrowUp, "Up")
         }
-        RemoteKey(TvKey.DOWN, onKey, enabled, Modifier.align(Alignment.BottomCenter).padding(bottom = 16.dp).size(64.dp, 56.dp), keyShape) {
+        RemoteKey(TvKey.DOWN, onKey, enabled, Modifier.align(Alignment.BottomCenter).padding(bottom = edge).size(64.dp * scale, 56.dp * scale), keyShape) {
             KeyIcon(Icons.Default.KeyboardArrowDown, "Down")
         }
-        RemoteKey(TvKey.LEFT, onKey, enabled, Modifier.align(Alignment.CenterStart).padding(start = 16.dp).size(56.dp, 64.dp), keyShape) {
+        RemoteKey(TvKey.LEFT, onKey, enabled, Modifier.align(Alignment.CenterStart).padding(start = edge).size(56.dp * scale, 64.dp * scale), keyShape) {
             KeyIcon(Icons.AutoMirrored.Filled.KeyboardArrowLeft, "Left")
         }
-        RemoteKey(TvKey.RIGHT, onKey, enabled, Modifier.align(Alignment.CenterEnd).padding(end = 16.dp).size(56.dp, 64.dp), keyShape) {
+        RemoteKey(TvKey.RIGHT, onKey, enabled, Modifier.align(Alignment.CenterEnd).padding(end = edge).size(56.dp * scale, 64.dp * scale), keyShape) {
             KeyIcon(Icons.AutoMirrored.Filled.KeyboardArrowRight, "Right")
         }
         RemoteKey(
-            TvKey.OK, onKey, enabled, Modifier.size(88.dp), CircleShape,
+            TvKey.OK, onKey, enabled, Modifier.size(88.dp * scale), CircleShape,
             MaterialTheme.colorScheme.background
         ) { Text("OK", style = MaterialTheme.typography.titleLarge, color = MaterialTheme.colorScheme.primary) }
     }
@@ -374,12 +386,14 @@ private fun RemoteContent(
             .background(MaterialTheme.colorScheme.background)
             .statusBarsPadding()
             .navigationBarsPadding()
-            .verticalScroll(rememberScrollState())
-            .padding(horizontal = 20.dp, vertical = 16.dp),
+            .padding(horizontal = 20.dp, vertical = 12.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
-        verticalArrangement = Arrangement.spacedBy(20.dp)
+        verticalArrangement = Arrangement.spacedBy(16.dp)
     ) {
-        Header(tvName, reconnecting = uiState.isReconnecting, enabled = enabled, onKey = onKey, onCopyDiagnostics = onCopyDiagnostics)
+        Header(
+            tvName, reconnecting = uiState.isReconnecting, enabled = enabled, onKey = onKey,
+            onCopyDiagnostics = onCopyDiagnostics, onSwitchTv = onSwitchTv
+        )
 
         uiState.error?.let {
             Text(it, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
@@ -389,9 +403,12 @@ private fun RemoteContent(
 
         PadModeToggle(padMode, onPadModeChange)
 
-        when (padMode) {
-            PadMode.DPAD -> DPad(onKey, enabled)
-            PadMode.TOUCHPAD -> Touchpad(onKey, enabled)
+        // The remote never scrolls: the pad takes whatever height the fixed rows leave
+        BoxWithConstraints(modifier = Modifier.weight(1f).fillMaxWidth(), contentAlignment = Alignment.Center) {
+            when (padMode) {
+                PadMode.DPAD -> DPad(onKey, enabled, size = minOf(DPAD_SIZE, maxWidth, maxHeight))
+                PadMode.TOUCHPAD -> Touchpad(onKey, enabled, Modifier.fillMaxSize())
+            }
         }
 
         Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceEvenly) {
@@ -414,10 +431,6 @@ private fun RemoteContent(
         }
 
         VolumeBar(onKey, enabled)
-
-        TextButton(onClick = { onSwitchTv() }) {
-            Text("SWITCH TV", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
-        }
     }
 }
 
@@ -608,12 +621,10 @@ private const val SWIPE_STEP_DP = 40
  * keeps scrolling) and a tap into OK.
  */
 @Composable
-private fun Touchpad(onKey: (TvKey, KeyAction) -> Unit, enabled: Boolean) {
+private fun Touchpad(onKey: (TvKey, KeyAction) -> Unit, enabled: Boolean, modifier: Modifier = Modifier) {
     val stepPx = with(LocalDensity.current) { SWIPE_STEP_DP.dp.toPx() }
     Box(
-        modifier = Modifier
-            .fillMaxWidth()
-            .height(256.dp)
+        modifier = modifier
             .alpha(if (enabled) 1f else 0.4f)
             .clip(MaterialTheme.shapes.large)
             .background(MaterialTheme.colorScheme.surfaceVariant)
