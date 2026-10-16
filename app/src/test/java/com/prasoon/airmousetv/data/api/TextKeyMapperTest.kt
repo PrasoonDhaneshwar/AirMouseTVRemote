@@ -4,6 +4,7 @@ import com.prasoon.airmousetv.proto.remote.RemoteKeyCode
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -50,11 +51,20 @@ class TextKeyMapperTest {
         assertEquals(TextKeyMapper.Stroke(RemoteKeyCode.KEYCODE_1, shift = true), TextKeyMapper.toStroke('!'))
         assertEquals(TextKeyMapper.Stroke(RemoteKeyCode.KEYCODE_9, shift = true), TextKeyMapper.toStroke('('))
         assertEquals(TextKeyMapper.Stroke(RemoteKeyCode.KEYCODE_0, shift = true), TextKeyMapper.toStroke(')'))
+        assertEquals(TextKeyMapper.Stroke(RemoteKeyCode.KEYCODE_4, shift = true), TextKeyMapper.toStroke('$'))
+        assertEquals(TextKeyMapper.Stroke(RemoteKeyCode.KEYCODE_7, shift = true), TextKeyMapper.toStroke('&'))
+        assertEquals(TextKeyMapper.Stroke(RemoteKeyCode.KEYCODE_COMMA, shift = true), TextKeyMapper.toStroke('<'))
+        assertEquals(TextKeyMapper.Stroke(RemoteKeyCode.KEYCODE_BACKSLASH, shift = true), TextKeyMapper.toStroke('|'))
+    }
+
+    @Test
+    fun everyPrintableAsciiCharacter_canBeTyped() {
+        for (c in ' '..'~') assertNotNull("$c", TextKeyMapper.toStroke(c))
     }
 
     @Test
     fun charactersTheRemoteCannotType_returnNull() {
-        for (c in listOf('é', '€', '\n', '\t', '你', '\uD83D', '<', '>', '{', '}', '|', '~', '%', '&', '$', '^')) {
+        for (c in listOf('é', '€', '\n', '\t', '你', '\uD83D')) {
             assertNull("$c", TextKeyMapper.toStroke(c))
         }
     }
