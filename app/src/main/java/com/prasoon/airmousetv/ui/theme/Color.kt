@@ -10,7 +10,8 @@ val OnTeal = Color(0xFF00282A)
 val Charcoal = Color(0xFF161A1F)
 val SurfaceMid = Color(0xFF2C3038)
 val SurfaceHigh = Color(0xFF363B44)
-val Outline = Color(0xFF4A505A)
+/** Borders of controls: 3.2:1 against Charcoal, above the 3:1 that accessibility guidance asks for. */
+val Outline = Color(0xFF626A75)
 
 val TextPrimary = Color(0xFFFFFFFF)
 val TextSecondary = Color(0xFFBFBFBF)
