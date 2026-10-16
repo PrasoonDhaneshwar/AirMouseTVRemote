@@ -9,6 +9,7 @@ import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.update
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.StandardTestDispatcher
 import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.advanceTimeBy
@@ -271,5 +272,55 @@ class TextEntryControllerTest {
         pass()
 
         assertEquals(listOf("edit '' -> 'ab'", "enter"), r.tv.log)
+    }
+
+    /** Collects what the controller announces as the TV's own text. */
+    private fun TestScope.collectAccepted(r: Rig): List<String> {
+        val got = mutableListOf<String>()
+        backgroundScope.launch { r.controller.acceptedTvText.collect { got += it } }
+        runCurrent()
+        return got
+    }
+
+    @Test
+    fun whenTheTvKeepsItsOwnText_thatTextIsAnnounced() = runTest {
+        // The TV always adds an "x" and never gets closer, so the controller accepts "abx"
+        val r = rig { behaviour = { _, current -> report(current + "x"); emptyList() } }
+        val accepted = collectAccepted(r)
+        r.controller.begin("")
+        r.controller.type("ab")
+        pass()
+
+        assertEquals(listOf("abx"), accepted)
+    }
+
+    @Test
+    fun afterAcceptingTheTvText_laterEditsStartFromIt() = runTest {
+        val r = rig { behaviour = { _, current -> report(current + "x"); emptyList() } }
+        r.controller.begin("")
+        r.controller.type("ab")
+        pass()
+        r.controller.type("abxc")
+        pass()
+
+        assertEquals("edit 'abx' -> 'abxc'", r.tv.log[2])
+    }
+
+    @Test
+    fun aTvThatMatchesOrIsCorrected_announcesNothing() = runTest {
+        var mangled = false
+        val r = rig {
+            behaviour = { _, current ->
+                // Doubles the text once, then behaves: the correction works, so nothing is given up on
+                if (!mangled) { mangled = true; report(current + current) } else report(current)
+                emptyList()
+            }
+        }
+        val accepted = collectAccepted(r)
+        r.controller.begin("")
+        r.controller.type("ab")
+        pass()
+
+        assertTrue(accepted.isEmpty())
     }
 }

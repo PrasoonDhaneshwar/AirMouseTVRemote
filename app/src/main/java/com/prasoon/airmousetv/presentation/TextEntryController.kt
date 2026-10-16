@@ -10,6 +10,9 @@ import com.prasoon.airmousetv.data.repository.RemoteSessionManager
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.channels.Channel
+import kotlinx.coroutines.channels.BufferOverflow
+import kotlinx.coroutines.flow.MutableSharedFlow
+import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
@@ -86,6 +89,9 @@ private sealed interface TextAction {
  * an endless loop. The TV can also change its text on its own a moment later, so once typing has
  * paused for [TEXT_SETTLE_DELAY_MS] the worker looks at what the TV has reported since the edit
  * (a TV that reported nothing is left alone).
+ *
+ * When the controller gives up on a mismatch, the TV's text is what the field really holds, so it is
+ * announced on [acceptedTvText] for the phone's text box to show.
  */
 internal class TextEntryController(
     scope: CoroutineScope,
@@ -97,6 +103,14 @@ internal class TextEntryController(
     /** The text the user wants on the TV right now, the newest one given to [type] or [begin]. */
     @Volatile
     private var wantedText = ""
+
+    private val _acceptedTvText = MutableSharedFlow<String>(extraBufferCapacity = 1, onBufferOverflow = BufferOverflow.DROP_OLDEST)
+
+    /**
+     * The TV's text, each time the controller stops trying to change it and takes it as it is. Not
+     * emitted while the user has typed something newer, which the next edit will deal with.
+     */
+    val acceptedTvText: SharedFlow<String> = _acceptedTvText
 
     init {
         scope.launch { work() }
@@ -126,6 +140,7 @@ internal class TextEntryController(
         var settleCheckDue = false
         var settleFocuses = 0  // how many fields had taken focus when the last edit was made
         var settleReports = 0  // how many reports the TV had made when the last edit was checked
+        var lastSent = ""  // the text of the newest edit sent to the TV
         var carried: TextAction? = null
 
         /** The TV shows [actual] instead of what was sent: trust it as the baseline and, if it isn't what the user wants, send that again. */
@@ -142,6 +157,10 @@ internal class TextEntryController(
                 actions.trySend(TextAction.Set(wantedText))
             } else {
                 corrections = 0
+                if (gap > 0 && wantedText == lastSent) {
+                    wantedText = actual  // later edits and checks work from what the field holds
+                    _acceptedTvText.tryEmit(actual)
+                }
             }
         }
 
@@ -186,6 +205,7 @@ internal class TextEntryController(
                         val reportsBefore = tv.imeField.value?.reports ?: 0
                         val skipped = tv.typeEdit(tvText, action.text)
                         tvText = action.text
+                        lastSent = action.text
                         if (skipped.isNotEmpty()) {
                             onError("Can't type: ${skipped.distinct().joinToString(" ")}")
                         }

@@ -473,6 +473,21 @@ private fun TextEntryDialog(viewModel: RemoteViewModel, onDismiss: () -> Unit) {
         mutableStateOf(TextFieldValue(initial, selection = TextRange(initial.length)))
     }
     val focusRequester = remember { FocusRequester() }
+    val context = LocalContext.current
+
+    // The TV's text box went away (another app, the TV's idle timeout, a lost connection): typing here would go nowhere
+    val fieldClosed = field == null
+    LaunchedEffect(fieldClosed) {
+        if (fieldClosed) {
+            Toast.makeText(context, "The TV's text box closed", Toast.LENGTH_SHORT).show()
+            onDismiss()
+        }
+    }
+
+    // When the TV keeps text other than what was typed, show that rather than text that isn't there
+    LaunchedEffect(Unit) {
+        viewModel.tvTextAccepted.collect { value = TextFieldValue(it, selection = TextRange(it.length)) }
+    }
 
     // Wait for the field to be laid out before asking for focus, or there is nothing to focus yet
     LaunchedEffect(Unit) {

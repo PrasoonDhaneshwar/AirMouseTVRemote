@@ -436,6 +436,9 @@ class RemoteViewModel @Inject constructor(
     /** Starts a text entry session whose field already shows [initial] on the TV. */
     fun beginTextEntry(initial: String) = textEntry.begin(initial)
 
+    /** The TV's text whenever it ends up different from what was typed and cannot be brought back in line. */
+    val tvTextAccepted get() = textEntry.acceptedTvText
+
     /** Makes the TV's focused text field show [text]; edits made in quick succession are merged. */
     fun typeText(text: String) = textEntry.type(text)
 
