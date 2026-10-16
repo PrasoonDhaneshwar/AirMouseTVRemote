@@ -5,12 +5,6 @@ sealed class ConnectionState {
     /** Nothing in progress. */
     object Idle : ConnectionState()
 
-    /** TLS to the pairing port (6467) is up. */
-    object TcpConnected : ConnectionState()
-
-    /** PairingRequest sent; waiting for the TV to answer. */
-    object PairingRequested : ConnectionState()
-
     /** The TV is displaying a 6-digit hex code and waiting for the user to enter it. */
     object AwaitingCode : ConnectionState()
 

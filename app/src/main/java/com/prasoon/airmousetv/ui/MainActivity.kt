@@ -8,8 +8,6 @@ import androidx.activity.ComponentActivity
 import androidx.activity.SystemBarStyle
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
-import androidx.compose.material3.windowsizeclass.ExperimentalMaterial3WindowSizeClassApi
-import androidx.compose.material3.windowsizeclass.calculateWindowSizeClass
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
@@ -27,7 +25,6 @@ private const val TAG = "MainActivity"
 @AndroidEntryPoint
 class MainActivity : ComponentActivity() {
 
-    @OptIn(ExperimentalMaterial3WindowSizeClassApi::class)
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
@@ -45,18 +42,14 @@ class MainActivity : ComponentActivity() {
 
         setContent {
             AirMouseTVRemoteTheme {
-                val windowSizeClass = calculateWindowSizeClass(this)
-                DiscoveryScreenContent(windowSizeClass = windowSizeClass)
+                DiscoveryScreenContent()
             }
         }
     }
 }
 
 @Composable
-private fun DiscoveryScreenContent(
-    windowSizeClass: androidx.compose.material3.windowsizeclass.WindowSizeClass,
-    viewModel: RemoteViewModel = hiltViewModel()
-) {
+private fun DiscoveryScreenContent(viewModel: RemoteViewModel = hiltViewModel()) {
     val uiState by viewModel.uiState.collectAsState()
 
     when (val mode = uiState.mode) {

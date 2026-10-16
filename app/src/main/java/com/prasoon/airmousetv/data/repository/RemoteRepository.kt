@@ -46,7 +46,6 @@ class RemoteRepository @Inject constructor(
     private val networkMonitor: NetworkMonitor,
     private val nsdDiscoveryEngine: NsdDiscoveryEngine,
     private val tvPortScanner: TvPortScanner,
-    private val tvCacheManager: TvCacheManager,
     private val session: RemoteSessionManager
 ) : NsdDiscoveryListener {
 

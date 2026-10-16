@@ -12,6 +12,7 @@ import com.prasoon.airmousetv.data.model.ConnectionState
 import com.prasoon.airmousetv.data.model.ImeField
 import com.prasoon.airmousetv.proto.polo.OuterMessage
 import com.prasoon.airmousetv.proto.remote.RemoteMessage
+import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -49,6 +50,8 @@ import java.security.cert.CertificateException
 import java.security.cert.X509Certificate
 import java.security.interfaces.RSAPublicKey
 import java.util.Date
+import javax.inject.Inject
+import javax.inject.Singleton
 import javax.net.ssl.SSLContext
 import javax.net.ssl.SSLEngine
 import javax.net.ssl.SSLSocket
@@ -105,7 +108,10 @@ private val KEYSTORE_PASSWORD = "atv-remote".toCharArray()
  *   S RemoteConfigure -> C RemoteConfigure, S RemoteSetActive -> C RemoteSetActive(features),
  *   then pings are answered and RemoteKeyInject messages are sent.
  */
-class RemoteSessionManager(private val context: Context) {
+@Singleton
+class RemoteSessionManager @Inject constructor(
+    @ApplicationContext private val context: Context
+) {
 
     /** Where the Polo handshake is; each incoming message is only accepted in its expected phase. */
     private enum class Phase { IDLE, AWAIT_REQUEST_ACK, AWAIT_OPTIONS, AWAIT_CONFIG_ACK, AWAIT_CODE, AWAIT_SECRET_ACK, PAIRED }
@@ -263,11 +269,9 @@ class RemoteSessionManager(private val context: Context) {
         val conn = openTlsSocket(host, PAIRING_PORT)
         pairingConn = conn
         serverCert = conn.socket.session.peerCertificates.firstOrNull() as? X509Certificate
-        _connectionState.value = ConnectionState.TcpConnected
 
         phase = Phase.AWAIT_REQUEST_ACK
         send(PairingPayloadFactory.createPairingRequest(clientName), conn)
-        _connectionState.value = ConnectionState.PairingRequested
 
         startReaderLoop(conn) { handlePoloFrame(conn, it) }
     }

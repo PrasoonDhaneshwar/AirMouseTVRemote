@@ -22,8 +22,6 @@ class LastTvStore @Inject constructor(
             putString("friendlyName", tv.friendlyName)
             putString("host", tv.host)
             putInt("port", tv.port)
-            putString("mac", tv.macAddress)
-            putString("serviceType", tv.serviceType)
         }
     }
 
@@ -33,9 +31,7 @@ class LastTvStore @Inject constructor(
             name = prefs.getString("name", null) ?: host,
             friendlyName = prefs.getString("friendlyName", null),
             host = host,
-            port = prefs.getInt("port", 0),
-            macAddress = prefs.getString("mac", null),
-            serviceType = prefs.getString("serviceType", "") ?: ""
+            port = prefs.getInt("port", 0)
         )
     }
 
