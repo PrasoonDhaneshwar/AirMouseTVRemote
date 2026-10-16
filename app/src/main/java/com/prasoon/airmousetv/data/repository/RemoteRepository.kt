@@ -107,8 +107,7 @@ class RemoteRepository @Inject constructor(
         scope.launch {
             try {
                 // Show a name derived from the service name straight away; the HTTP lookup below may replace it
-                val fallbackName = tv.name.split("-").first()
-                    .replace(Regex("[^A-Z0-9]"), "").take(8).uppercase() + " TV"
+                val fallbackName = tv.copy(friendlyName = null).displayName
                 updateDiscoveredList(tv.copy(friendlyName = fallbackName))
 
                 // Try HTTP scan

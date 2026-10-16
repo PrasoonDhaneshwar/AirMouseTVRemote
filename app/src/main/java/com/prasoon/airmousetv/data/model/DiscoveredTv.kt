@@ -7,10 +7,11 @@ data class DiscoveredTv(
     val port: Int
 ) {
     val displayName: String get() = friendlyName ?: run {
+        // Upper-case first: filtering to A-Z would otherwise throw away every letter of a lower-case name
         val model = name.split("-").first()
+            .uppercase()
             .replace(Regex("[^A-Z0-9]"), "")
             .take(8)
-            .uppercase()
-        "$model TV"
+        if (model.isEmpty()) "TV" else "$model TV"
     }
 }
