@@ -6,6 +6,7 @@ import android.os.Bundle
 import android.util.Log
 import androidx.activity.ComponentActivity
 import androidx.activity.SystemBarStyle
+import androidx.activity.compose.BackHandler
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.compose.runtime.Composable
@@ -63,6 +64,8 @@ private fun DiscoveryScreenContent(viewModel: RemoteViewModel = hiltViewModel())
 
         is RemoteMode.Pairing -> {
             Log.d(TAG, "Displaying PairingScreen for TV: ${mode.tv.displayName}")
+            // There is no back stack: screens are picked from state, so Back must be told what "back" means here
+            BackHandler(onBack = viewModel::cancelPairing)
             PairingScreen(viewModel)
         }
 
