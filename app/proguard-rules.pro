@@ -14,15 +14,23 @@
 
 # Uncomment this to preserve the line number information for
 # debugging stack traces.
-#-keepattributes SourceFile,LineNumberTable
+-keepattributes SourceFile,LineNumberTable
 
 # If you keep the line number information, uncomment this to
 # hide the original source file name.
-#-renamesourcefileattribute SourceFile
+-renamesourcefileattribute SourceFile
 
 # Protobuf-lite looks up the generated message fields by name (e.g. "remoteConfigure_") when it
 # parses and builds messages, so R8 must not rename or remove them. Without this the TV protocol
 # fails at runtime with NoSuchFieldException.
 -keepclassmembers class * extends com.google.protobuf.GeneratedMessageLite {
     <fields>;
+}
+
+# Release builds drop verbose, debug and info logging: those lines carry TV names and addresses and
+# are only useful while developing. Warnings and errors stay.
+-assumenosideeffects class android.util.Log {
+    public static int v(...);
+    public static int d(...);
+    public static int i(...);
 }
