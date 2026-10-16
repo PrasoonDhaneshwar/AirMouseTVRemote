@@ -11,6 +11,8 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
@@ -44,18 +46,19 @@ import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.text.input.KeyboardCapitalization
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
+import com.prasoon.airmousetv.data.api.PAIRING_CODE_LENGTH
+import com.prasoon.airmousetv.data.api.normalizePairingCode
 import com.prasoon.airmousetv.data.model.DiscoveredTv
 import com.prasoon.airmousetv.data.model.RemoteMode
 import com.prasoon.airmousetv.data.model.RemoteUiState
 import com.prasoon.airmousetv.ui.theme.AirMouseTVRemoteTheme
 import com.prasoon.airmousetv.presentation.RemoteViewModel
-
-private const val CODE_LENGTH = 6
 
 /**
  * Shown while connecting to a TV. Displays a spinner until the TV asks for its pairing code,
@@ -112,17 +115,20 @@ private fun PairingContent(
 
             Spacer(Modifier.height(24.dp))
 
-            Box(
-                modifier = Modifier
-                    .size(64.dp)
-                    .clip(MaterialTheme.shapes.large)
-                    .background(MaterialTheme.colorScheme.surfaceVariant),
-                contentAlignment = Alignment.Center
-            ) {
-                Icon(Icons.Default.Tv, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
+            // The keyboard takes half the screen while a code is typed, so the icon makes way for the Connect button
+            if (!uiState.awaitingCode) {
+                Box(
+                    modifier = Modifier
+                        .size(64.dp)
+                        .clip(MaterialTheme.shapes.large)
+                        .background(MaterialTheme.colorScheme.surfaceVariant),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Icon(Icons.Default.Tv, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
+                }
             }
             if (tv != null) {
-                Spacer(Modifier.height(12.dp))
+                if (!uiState.awaitingCode) Spacer(Modifier.height(12.dp))
                 Text(
                     text = "Target: ${tv.displayName}",
                     style = MaterialTheme.typography.titleSmall,
@@ -181,7 +187,7 @@ private fun PairingContent(
             if (uiState.awaitingCode) {
                 Button(
                     onClick = { onSubmit() },
-                    enabled = uiState.pairingCode.length == CODE_LENGTH,
+                    enabled = uiState.pairingCode.length == PAIRING_CODE_LENGTH,
                     modifier = Modifier.fillMaxWidth().height(56.dp),
                     shape = MaterialTheme.shapes.medium
                 ) {
@@ -196,32 +202,41 @@ private fun PairingContent(
 
 /**
  * Six boxes showing [code], filled from a hidden text field so the system keyboard supplies
- * 0-9 and A-F. Input is upper-cased and limited to hex digits.
+ * digits and capital letters together. Tapping the boxes brings the keyboard back.
  */
 @Composable
 private fun CodeField(code: String, onCodeChange: (String) -> Unit) {
     val focusRequester = remember { FocusRequester() }
+    val keyboard = LocalSoftwareKeyboardController.current
     LaunchedEffect(Unit) { focusRequester.requestFocus() }
 
     BasicTextField(
         value = code,
         onValueChange = { raw ->
-            onCodeChange(raw.uppercase().filter { it in '0'..'9' || it in 'A'..'F' }.take(CODE_LENGTH))
+            onCodeChange(normalizePairingCode(raw))
         },
         modifier = Modifier.focusRequester(focusRequester),
         singleLine = true,
         cursorBrush = SolidColor(Color.Transparent),
         textStyle = MaterialTheme.typography.titleLarge.copy(color = Color.Transparent),
         keyboardOptions = KeyboardOptions(
-            keyboardType = KeyboardType.Ascii,
+            // Password type makes the keyboard show its number row above the letters; the field is invisible anyway
+            keyboardType = KeyboardType.Password,
             capitalization = KeyboardCapitalization.Characters
         ),
         decorationBox = { innerTextField ->
             // The real field must stay composed to hold focus and the keyboard; the boxes are what the user sees
             Box(Modifier.size(1.dp).alpha(0f)) { innerTextField() }
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
-                repeat(CODE_LENGTH) { index ->
-                    if (index == CODE_LENGTH / 2) {
+            Row(
+                modifier = Modifier.clickable(indication = null, interactionSource = remember { MutableInteractionSource() }) {
+                    focusRequester.requestFocus()
+                    keyboard?.show()
+                },
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                repeat(PAIRING_CODE_LENGTH) { index ->
+                    if (index == PAIRING_CODE_LENGTH / 2) {
                         Box(Modifier.size(width = 8.dp, height = 2.dp).background(MaterialTheme.colorScheme.outline, CircleShape))
                     }
                     CodeBox(char = code.getOrNull(index), active = index == code.length)
