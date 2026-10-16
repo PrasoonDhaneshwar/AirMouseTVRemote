@@ -3,6 +3,8 @@ package com.prasoon.airmousetv.presentation
 import android.util.Log
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.prasoon.airmousetv.data.api.PAIRING_CODE_LENGTH
+import com.prasoon.airmousetv.data.api.normalizePairingCode
 import com.prasoon.airmousetv.data.model.ConnectionState
 import com.prasoon.airmousetv.data.model.DiscoveredTv
 import com.prasoon.airmousetv.data.model.KeyAction
@@ -382,17 +384,15 @@ class RemoteViewModel @Inject constructor(
         }
     }
 
-    /** Keeps only hex digits, upper-cased and capped at 6, and clears any shown error. */
+    /** Keeps only what can be part of a pairing code (see [normalizePairingCode]) and clears any shown error. */
     fun updatePairingCode(code: String) {
-        // Pairing codes are 6 hex digits
-        val hex = code.uppercase().filter { it in '0'..'9' || it in 'A'..'F' }.take(6)
-        _uiState.value = _uiState.value.copy(pairingCode = hex, error = null)
+        _uiState.value = _uiState.value.copy(pairingCode = normalizePairingCode(code), error = null)
     }
 
     /** Sends the typed code to the TV; ignored until all 6 digits are entered. */
     fun submitPairingCode() {
         val code = _uiState.value.pairingCode
-        if (code.length != 6) return  // 6-digit hex code
+        if (code.length != PAIRING_CODE_LENGTH) return
 
         viewModelScope.launch {
             remoteSession.submitPairingCode(code)

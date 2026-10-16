@@ -14,7 +14,7 @@ import java.security.interfaces.RSAPublicKey
  */
 internal fun computePairingSecret(code: String, client: RSAPublicKey, server: RSAPublicKey): ByteArray? {
     val hex = code.uppercase()
-    if (hex.length != 6 || !hex.all { it in '0'..'9' || it in 'A'..'F' }) return null
+    if (hex.length != PAIRING_CODE_LENGTH || !hex.all(::isPairingCodeChar)) return null
     val digest = MessageDigest.getInstance("SHA-256").run {
         update(client.modulus.unsignedBytes())
         update(client.publicExponent.unsignedBytes())
