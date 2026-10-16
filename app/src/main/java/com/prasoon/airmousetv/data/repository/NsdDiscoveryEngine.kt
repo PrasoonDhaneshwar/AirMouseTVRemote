@@ -12,6 +12,7 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.launch
+import java.net.InetAddress
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.Executors
 import javax.inject.Inject
@@ -171,9 +172,14 @@ class NsdDiscoveryEngine @Inject constructor(
         }
     }
 
+    /** Every address the resolved service reports: all of them on API 34+, the single one the old API gives below. */
+    @Suppress("DEPRECATION")
+    private fun addressesOf(info: NsdServiceInfo): List<InetAddress> =
+        if (Build.VERSION.SDK_INT >= 34) info.hostAddresses else listOfNotNull(info.host)
+
     /** A service was resolved to an address: list it under its TXT name, or ask for an HTTP name lookup if it has none. */
     private fun handleResolved(discovered: NsdServiceInfo, info: NsdServiceInfo) {
-        val host = info.host?.hostAddress ?: return
+        val host = pickHost(addressesOf(info)) ?: return
         val port = info.port.takeIf { it > 0 } ?: return
 
         Log.d(TAG_NSD, "📍 Resolved ${info.serviceName} -> $host:$port")
