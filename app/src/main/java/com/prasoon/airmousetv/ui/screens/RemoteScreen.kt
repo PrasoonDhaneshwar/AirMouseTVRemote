@@ -75,6 +75,8 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.disabled
+import androidx.compose.ui.semantics.onClick
 import androidx.compose.ui.semantics.role
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.AnnotatedString
@@ -179,7 +181,7 @@ private fun Header(
             onKey = onKey,
             enabled = enabled,
             shape = CircleShape,
-            modifier = Modifier.size(44.dp)
+            modifier = Modifier.size(48.dp)
         ) { KeyIcon(Icons.Default.PowerSettingsNew, "Power", tint = MaterialTheme.colorScheme.secondary) }
         OverflowMenu(onCopyDiagnostics, onSwitchTv)
     }
@@ -628,6 +630,10 @@ private fun Touchpad(onKey: (TvKey, KeyAction) -> Unit, enabled: Boolean, modifi
             .alpha(if (enabled) 1f else 0.4f)
             .clip(MaterialTheme.shapes.large)
             .background(MaterialTheme.colorScheme.surfaceVariant)
+            .semantics {
+                contentDescription = "Touchpad. Double-tap to select, or switch to the D-pad."
+                if (enabled) onClick { onKey(TvKey.OK, KeyAction.TAP); true } else disabled()
+            }
             .pointerInput(enabled) {
                 if (!enabled) return@pointerInput
                 detectTapGestures(onTap = { onKey(TvKey.OK, KeyAction.TAP) })
@@ -688,7 +694,10 @@ private fun RemoteKey(
         pressed = pressed,
         shape = shape,
         container = container,
-        modifier = modifier.pointerInput(key, enabled) {
+        // The touch handling below is invisible to accessibility services, so say what a double-tap does
+        modifier = modifier.semantics {
+            if (enabled) onClick { onKey(key, KeyAction.TAP); true } else disabled()
+        }.pointerInput(key, enabled) {
             if (!enabled) return@pointerInput
             detectTapGestures(onPress = {
                 pressed = true
