@@ -692,18 +692,25 @@ private fun RemoteKey(
             if (!enabled) return@pointerInput
             detectTapGestures(onPress = {
                 pressed = true
-                // null means the hold timeout expired before release; true = released, false = cancelled
-                val released = withTimeoutOrNull(HOLD_THRESHOLD_MS) { tryAwaitRelease() }
-                when (released) {
-                    true -> onKey(key, KeyAction.TAP)
-                    null -> {
-                        onKey(key, KeyAction.LONG_START)
-                        tryAwaitRelease()
-                        onKey(key, KeyAction.LONG_END)
+                var holding = false
+                try {
+                    // null means the hold timeout expired before release; true = released, false = cancelled
+                    val released = withTimeoutOrNull(HOLD_THRESHOLD_MS) { tryAwaitRelease() }
+                    when (released) {
+                        true -> onKey(key, KeyAction.TAP)
+                        null -> {
+                            onKey(key, KeyAction.LONG_START)
+                            holding = true
+                            tryAwaitRelease()
+                        }
+                        false -> Unit
                     }
-                    false -> Unit
+                } finally {
+                    // Also runs when this block is cancelled mid-hold (the keys got disabled, or the screen
+                    // went away): without it the TV would keep the key held down
+                    if (holding) onKey(key, KeyAction.LONG_END)
+                    pressed = false
                 }
-                pressed = false
             })
         },
         content = content
