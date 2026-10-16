@@ -19,3 +19,10 @@
 # If you keep the line number information, uncomment this to
 # hide the original source file name.
 #-renamesourcefileattribute SourceFile
+
+# Protobuf-lite looks up the generated message fields by name (e.g. "remoteConfigure_") when it
+# parses and builds messages, so R8 must not rename or remove them. Without this the TV protocol
+# fails at runtime with NoSuchFieldException.
+-keepclassmembers class * extends com.google.protobuf.GeneratedMessageLite {
+    <fields>;
+}
