@@ -14,12 +14,15 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
@@ -252,6 +255,12 @@ private fun MediaButtons(onKey: (TvKey, KeyAction) -> Unit, enabled: Boolean) {
     }
 }
 
+/** Below this much usable height (before text scaling) the remote scrolls rather than squeeze the pad. */
+private val MIN_FIXED_LAYOUT_HEIGHT = 620.dp
+
+/** The pad area's height when the remote scrolls. */
+private val MIN_PAD_HEIGHT = 240.dp
+
 /** The D-pad's full size; it is drawn smaller, with everything in proportion, when the screen is short. */
 private val DPAD_SIZE = 256.dp
 
@@ -382,57 +391,69 @@ private fun RemoteContent(
     val enabled = !uiState.isReconnecting
     val tvName = (uiState.mode as? RemoteMode.Connected)?.tv?.displayName.orEmpty()
 
-    Column(
+    BoxWithConstraints(
         modifier = Modifier
             .fillMaxSize()
             .background(MaterialTheme.colorScheme.background)
             .statusBarsPadding()
             .navigationBarsPadding()
-            .padding(horizontal = 20.dp, vertical = 12.dp),
-        horizontalAlignment = Alignment.CenterHorizontally,
-        verticalArrangement = Arrangement.spacedBy(16.dp)
     ) {
-        Header(
-            tvName, reconnecting = uiState.isReconnecting, enabled = enabled, onKey = onKey,
-            onCopyDiagnostics = onCopyDiagnostics, onSwitchTv = onSwitchTv
-        )
+        // Larger text makes the fixed rows taller, so the screen counts as short sooner
+        val scrolls = maxHeight < MIN_FIXED_LAYOUT_HEIGHT * LocalDensity.current.fontScale.coerceAtLeast(1f)
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .then(if (scrolls) Modifier.verticalScroll(rememberScrollState()) else Modifier)
+                .padding(horizontal = 20.dp, vertical = 12.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.spacedBy(16.dp)
+        ) {
+            Header(
+                tvName, reconnecting = uiState.isReconnecting, enabled = enabled, onKey = onKey,
+                onCopyDiagnostics = onCopyDiagnostics, onSwitchTv = onSwitchTv
+            )
 
-        uiState.error?.let {
-            Text(it, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
-        }
-
-        MediaPill(onKey, enabled)
-
-        PadModeToggle(padMode, onPadModeChange)
-
-        // The remote never scrolls: the pad takes whatever height the fixed rows leave
-        BoxWithConstraints(modifier = Modifier.weight(1f).fillMaxWidth(), contentAlignment = Alignment.Center) {
-            when (padMode) {
-                PadMode.DPAD -> DPad(onKey, enabled, size = minOf(DPAD_SIZE, maxWidth, maxHeight))
-                PadMode.TOUCHPAD -> Touchpad(onKey, enabled, Modifier.fillMaxSize())
+            uiState.error?.let {
+                Text(it, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
             }
-        }
 
-        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceEvenly) {
-            LabeledKey("BACK", enabled, onClick = null, key = TvKey.BACK, onKey = onKey) {
-                KeyIcon(Icons.AutoMirrored.Filled.ArrowBack, "Back")
-            }
-            LabeledKey("HOME", enabled, onClick = null, key = TvKey.HOME, onKey = onKey) {
-                KeyIcon(Icons.Default.Home, "Home")
-            }
-            // Dimmed, but still tappable, while the TV has no text box: a tap then says what to do
-            LabeledKey("KEYBOARD", enabled, onClick = onShowKeyboard, dimmed = uiState.imeField == null) {
-                KeyIcon(Icons.Default.Keyboard, "Keyboard")
-            }
-            // YouTube draws its own keyboard that the TV can't type into, so offer a direct search
-            if (uiState.foregroundApp?.startsWith("com.google.android.youtube.tv") == true) {
-                LabeledKey("YOUTUBE\nSEARCH", enabled, onClick = onShowYouTubeSearch) {
-                    KeyIcon(Icons.Default.Search, "Search YouTube")
+            MediaPill(onKey, enabled)
+
+            PadModeToggle(padMode, onPadModeChange)
+
+            // The pad takes whatever height the fixed rows leave. On a screen too short for that it gets a
+            // fixed height instead and the page scrolls, so the pad can never shrink to nothing
+            BoxWithConstraints(
+                modifier = (if (scrolls) Modifier.height(MIN_PAD_HEIGHT) else Modifier.weight(1f)).fillMaxWidth(),
+                contentAlignment = Alignment.Center
+            ) {
+                when (padMode) {
+                    PadMode.DPAD -> DPad(onKey, enabled, size = minOf(DPAD_SIZE, maxWidth, maxHeight))
+                    PadMode.TOUCHPAD -> Touchpad(onKey, enabled, Modifier.fillMaxSize())
                 }
             }
-        }
 
-        VolumeBar(onKey, enabled)
+            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceEvenly) {
+                LabeledKey("BACK", enabled, onClick = null, key = TvKey.BACK, onKey = onKey) {
+                    KeyIcon(Icons.AutoMirrored.Filled.ArrowBack, "Back")
+                }
+                LabeledKey("HOME", enabled, onClick = null, key = TvKey.HOME, onKey = onKey) {
+                    KeyIcon(Icons.Default.Home, "Home")
+                }
+                // Dimmed, but still tappable, while the TV has no text box: a tap then says what to do
+                LabeledKey("KEYBOARD", enabled, onClick = onShowKeyboard, dimmed = uiState.imeField == null) {
+                    KeyIcon(Icons.Default.Keyboard, "Keyboard")
+                }
+                // YouTube draws its own keyboard that the TV can't type into, so offer a direct search
+                if (uiState.foregroundApp?.startsWith("com.google.android.youtube.tv") == true) {
+                    LabeledKey("YOUTUBE\nSEARCH", enabled, onClick = onShowYouTubeSearch) {
+                        KeyIcon(Icons.Default.Search, "Search YouTube")
+                    }
+                }
+            }
+
+            VolumeBar(onKey, enabled)
+        }
     }
 }
 
@@ -755,6 +776,14 @@ private val previewMode = RemoteMode.Connected(
 @Preview(showBackground = true, widthDp = 390, heightDp = 844, name = "D-pad")
 @Composable
 private fun RemoteDPadPreview() {
+    AirMouseTVRemoteTheme {
+        RemoteContent(RemoteUiState(mode = previewMode), PadMode.DPAD, {}, { _, _ -> }, {}, {}, {}, {})
+    }
+}
+
+@Preview(showBackground = true, widthDp = 360, heightDp = 520, name = "Short screen: scrolls")
+@Composable
+private fun RemoteShortScreenPreview() {
     AirMouseTVRemoteTheme {
         RemoteContent(RemoteUiState(mode = previewMode), PadMode.DPAD, {}, { _, _ -> }, {}, {}, {}, {})
     }
