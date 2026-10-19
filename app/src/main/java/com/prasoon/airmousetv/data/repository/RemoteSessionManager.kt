@@ -27,34 +27,18 @@ import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.coroutines.withContext
-import org.bouncycastle.asn1.x500.X500Name
-import org.bouncycastle.cert.jcajce.JcaX509CertificateConverter
-import org.bouncycastle.cert.jcajce.JcaX509v3CertificateBuilder
-import org.bouncycastle.operator.jcajce.JcaContentSignerBuilder
 import java.io.BufferedInputStream
 import java.io.BufferedOutputStream
 import java.io.DataInputStream
 import java.io.DataOutputStream
-import java.io.File
-import java.math.BigInteger
 import java.net.InetSocketAddress
 import java.net.Socket
-import java.security.KeyPairGenerator
-import java.security.KeyStore
-import java.security.Principal
-import java.security.PrivateKey
-import java.security.SecureRandom
 import java.security.cert.CertificateException
 import java.security.cert.X509Certificate
 import java.security.interfaces.RSAPublicKey
-import java.util.Date
 import javax.inject.Inject
 import javax.inject.Singleton
-import javax.net.ssl.SSLContext
-import javax.net.ssl.SSLEngine
 import javax.net.ssl.SSLSocket
-import javax.net.ssl.X509ExtendedKeyManager
-import javax.net.ssl.X509TrustManager
 
 private const val TAG = "RemoteSession"
 /** Polo pairing port on the TV. */
@@ -73,8 +57,6 @@ private const val SUPPORTED_FEATURES = 1 or 2 or 4 or 32 or 64 or 512
  * TV, such as a stick waking from standby.
  */
 private const val TRUSTED_CHECK_TIMEOUT_MS = 10_000L
-/** TCP connect timeout; a TV on the same LAN answers (or refuses) well within this. */
-private const val CONNECT_TIMEOUT_MS = 4000
 /** No bytes from the TV for this long on the remote connection means it is gone; most TVs ping every ~5 s, but a waipu stick went quiet for over 15 s. */
 private const val REMOTE_READ_TIMEOUT_MS = 40_000
 /** How many recent events [RemoteSessionManager.diagnosticsReport] keeps. */
@@ -83,17 +65,6 @@ private const val MAX_DIAGNOSTIC_LINES = 60
 private const val UNPINGED_READ_TIMEOUT_MS = 90_000
 /** Shorter timeout for the pre-connect reachability probe, so an off TV is reported quickly. */
 private const val REACHABILITY_TIMEOUT_MS = 1500
-
-/** The TV's address didn't accept a connection: it is off, still booting, or has a new IP. */
-class TvUnreachableException(host: String, cause: Throwable) : Exception(
-    "TV not reachable at $host. Make sure it is on and on the same Wi-Fi, and that a VPN isn't blocking local network access.", cause
-)
-/** Alias of the client key/certificate inside the PKCS12 file. */
-private const val CERT_ALIAS = "androidtv-remote"
-/** App-private file holding the client certificate; the TV pairs with this exact certificate. */
-private const val KEYSTORE_FILE = "atv_client.p12"
-/** Protects only the app-private keystore file, so it is not a secret worth rotating. */
-private val KEYSTORE_PASSWORD = "atv-remote".toCharArray()
 
 /**
  * Polo pairing over TLS on port 6467:
@@ -172,8 +143,8 @@ class RemoteSessionManager @Inject constructor(
     // Frame hex is only logged in debuggable builds: it includes the pairing Secret
     private val debuggable = context.applicationInfo.flags and ApplicationInfo.FLAG_DEBUGGABLE != 0
 
-    /** Our certificate and private key, loaded or created on first use. */
-    private val clientIdentity: Pair<X509Certificate, PrivateKey> by lazy { loadOrCreateClientIdentity() }
+    /** Opens the TLS sockets with our client certificate. */
+    private val tls = TvTlsConnector(context.filesDir)
 
     /** The TV certificate seen on the remote port, per address, so a different device at that address is refused. */
     private val pinStore by lazy {
@@ -205,14 +176,19 @@ class RemoteSessionManager @Inject constructor(
 
     /** Drops any open connection and returns to a clean idle state aimed at [host]. */
     private fun resetConnections(host: String) {
+        dropConnections()
+        this.host = host
+        _connectionState.value = ConnectionState.Idle
+    }
+
+    /** Closes both connections and forgets the pairing progress and the TV's text field. */
+    private fun dropConnections() {
         closeConn(pairingConn)
         closeConn(remoteConn)
         pairingConn = null
         remoteConn = null
         phase = Phase.IDLE
-        this.host = host
         _imeField.value = null
-        _connectionState.value = ConnectionState.Idle
     }
 
     /**
@@ -289,39 +265,14 @@ class RemoteSessionManager @Inject constructor(
         return conn
     }
 
-    /**
-     * Opens a TLS connection to [host]:[port], offering our client certificate.
-     * Runs on the IO dispatcher; the socket is closed if connecting or the handshake fails.
-     */
+    /** Opens a TLS connection to [host]:[port] on the IO dispatcher; the remote port's certificate must match its pin. */
     private suspend fun openTlsSocket(host: String, port: Int): Conn =
         withContext(Dispatchers.IO) {
-            Log.d(TAG, "Connecting to $host:$port with TLS")
-            val (clientCert, privateKey) = clientIdentity
-
             // Pairing (6467) trusts whatever answers, since the code proves the TV. The remote port must
             // keep presenting the certificate it first showed.
-            val sslContext = createSslContext(clientCert, privateKey) { chain ->
+            val socket = tls.open(host, port) { chain ->
                 if (port == REMOTE_PORT) verifyPinnedCert(host, chain)
             }
-            val socket = sslContext.socketFactory.createSocket() as SSLSocket
-            socket.useClientMode = true
-            socket.keepAlive = true
-            socket.tcpNoDelay = true
-            try {
-                socket.connect(InetSocketAddress(host, port), CONNECT_TIMEOUT_MS)
-                socket.soTimeout = 0
-                socket.startHandshake()
-            } catch (e: Exception) {
-                runCatching { socket.close() }
-                throw if (e is java.net.SocketTimeoutException || e is java.net.ConnectException) {
-                    TvUnreachableException(host, e)
-                } else e
-            }
-
-            val session = socket.session
-            Log.d(TAG, "TLS handshake complete on $port: ${session.protocol} ${session.cipherSuite}")
-            Log.d(TAG, "Local certificates count: ${session.localCertificates?.size ?: 0}")
-
             Conn(
                 socket,
                 DataInputStream(BufferedInputStream(socket.getInputStream())),
@@ -329,87 +280,12 @@ class RemoteSessionManager @Inject constructor(
             )
         }
 
-    // The TV pairs with this exact certificate, so it must survive app restarts
-    /**
-     * Loads our certificate from [KEYSTORE_FILE], or creates a 2048-bit RSA self-signed one
-     * (valid 10 years) and saves it. It must persist: the TV only accepts the certificate it paired with.
-     */
-    private fun loadOrCreateClientIdentity(): Pair<X509Certificate, PrivateKey> {
-        val file = File(context.filesDir, KEYSTORE_FILE)
-        val keyStore = KeyStore.getInstance("PKCS12")
-        if (file.exists()) {
-            try {
-                file.inputStream().use { keyStore.load(it, KEYSTORE_PASSWORD) }
-                val cert = keyStore.getCertificate(CERT_ALIAS) as X509Certificate
-                val key = keyStore.getKey(CERT_ALIAS, KEYSTORE_PASSWORD) as PrivateKey
-                Log.d(TAG, "Loaded persisted client certificate")
-                return cert to key
-            } catch (e: Exception) {
-                Log.w(TAG, "Stored client certificate unreadable, regenerating", e)
-            }
-        }
-
-        val keyPairGenerator = KeyPairGenerator.getInstance("RSA")
-        keyPairGenerator.initialize(2048, SecureRandom())
-        val keyPair = keyPairGenerator.generateKeyPair()
-
-        val now = Date()
-        val subject = X500Name("CN=atvremote/AirMouseTV")
-        val holder = JcaX509v3CertificateBuilder(
-            subject,
-            BigInteger.valueOf(System.currentTimeMillis()),
-            now,
-            Date(now.time + 10L * 365 * 24 * 60 * 60 * 1000),
-            subject,
-            keyPair.public
-        ).build(JcaContentSignerBuilder("SHA256WithRSA").build(keyPair.private))
-        val cert = JcaX509CertificateConverter().getCertificate(holder)
-
-        keyStore.load(null, null)
-        keyStore.setKeyEntry(CERT_ALIAS, keyPair.private, KEYSTORE_PASSWORD, arrayOf(cert))
-        file.outputStream().use { keyStore.store(it, KEYSTORE_PASSWORD) }
-        Log.d(TAG, "Generated and persisted new client certificate")
-        return cert to keyPair.private
-    }
-
     /** Throws unless the TV at [host] presents the same certificate as the first time it was seen on the remote port. */
     private fun verifyPinnedCert(host: String, chain: Array<X509Certificate>?) {
         val leaf = chain?.firstOrNull() ?: throw CertificateException("TV sent no certificate")
         if (!pinStore.verifyOrRemember(pinKey(host), CertPinStore.fingerprint(leaf))) {
             note("TV certificate at $host changed, refusing the connection")
             throw CertificateException("The certificate of the device at $host is not the one it paired with")
-        }
-    }
-
-    /**
-     * Builds a TLS context that presents [clientCert] and accepts the TV's self-signed certificate,
-     * after [checkServer] has looked at it (it throws to refuse the connection).
-     */
-    private fun createSslContext(
-        clientCert: X509Certificate,
-        privateKey: PrivateKey,
-        checkServer: (Array<X509Certificate>?) -> Unit
-    ): SSLContext {
-        // The TV uses a self-signed cert, so there is no CA chain to validate; callers pin it instead
-        val serverTrust = object : X509TrustManager {
-            override fun checkClientTrusted(chain: Array<X509Certificate>?, authType: String?) {}
-            override fun checkServerTrusted(chain: Array<X509Certificate>?, authType: String?) = checkServer(chain)
-            override fun getAcceptedIssuers(): Array<X509Certificate> = emptyArray()
-        }
-
-        // Always offer our cert, even if the TV's CertificateRequest lists issuers we don't match
-        val keyManager = object : X509ExtendedKeyManager() {
-            override fun chooseClientAlias(keyType: Array<String>?, issuers: Array<Principal>?, socket: Socket?) = CERT_ALIAS
-            override fun chooseEngineClientAlias(keyType: Array<String>?, issuers: Array<Principal>?, engine: SSLEngine?) = CERT_ALIAS
-            override fun getClientAliases(keyType: String?, issuers: Array<Principal>?) = arrayOf(CERT_ALIAS)
-            override fun getCertificateChain(alias: String?) = arrayOf(clientCert)
-            override fun getPrivateKey(alias: String?) = privateKey
-            override fun getServerAliases(keyType: String?, issuers: Array<Principal>?): Array<String>? = null
-            override fun chooseServerAlias(keyType: String?, issuers: Array<Principal>?, socket: Socket?): String? = null
-        }
-
-        return SSLContext.getInstance("TLS").apply {
-            init(arrayOf(keyManager), arrayOf(serverTrust), SecureRandom())
         }
     }
 
@@ -545,7 +421,7 @@ class RemoteSessionManager @Inject constructor(
             _connectionState.value = ConnectionState.Error("TV certificate missing or not RSA")
             return
         }
-        val clientKey = clientIdentity.first.publicKey as RSAPublicKey
+        val clientKey = tls.clientCertificate.publicKey as RSAPublicKey
 
         val secret = computePairingSecret(code, clientKey, serverKey)
         if (secret == null) {
@@ -717,12 +593,7 @@ class RemoteSessionManager @Inject constructor(
     /** Closes everything and reports Disconnected. */
     fun close() {
         Log.d(TAG, "Closing session")
-        closeConn(pairingConn)
-        closeConn(remoteConn)
-        pairingConn = null
-        remoteConn = null
-        phase = Phase.IDLE
-        _imeField.value = null
+        dropConnections()
         _foregroundApp.value = null
         _connectionState.value = ConnectionState.Disconnected
     }

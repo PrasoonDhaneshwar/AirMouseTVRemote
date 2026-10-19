@@ -256,7 +256,7 @@ private fun RefreshIcon(rotation: () -> Float = { 0f }) {
 }
 
 @Composable
-fun TargetItem(
+private fun TargetItem(
     tv: DiscoveredTv,
     enabled: Boolean,
     onClick: () -> Unit

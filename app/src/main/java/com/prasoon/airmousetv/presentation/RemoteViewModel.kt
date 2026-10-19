@@ -105,18 +105,10 @@ class RemoteViewModel @Inject constructor(
         Log.i(TAG, "Reconnecting to last TV: ${tv.displayName}")
         _uiState.value = _uiState.value.copy(mode = RemoteMode.Pairing(tv))
         viewModelScope.launch {
-            val ok = try {
-                remoteSession.reconnect(tv.host)
-            } catch (e: Exception) {
-                Log.w(TAG, "Reconnect to last TV failed", e)
-                false
-            }
+            val ok = tryReconnect(tv)
             // On success the Connected state moves us to the remote screen
             if (!ok && _uiState.value.mode is RemoteMode.Pairing) {
-                _uiState.value = _uiState.value.copy(
-                    mode = RemoteMode.Discovery,
-                    error = "Couldn't reach ${tv.displayName} at ${tv.host}. Pick it below to reconnect."
-                )
+                returnToDiscovery(error = "Couldn't reach ${tv.displayName} at ${tv.host}. Pick it below to reconnect.")
             }
         }
     }
@@ -128,24 +120,35 @@ class RemoteViewModel @Inject constructor(
             _uiState.value = _uiState.value.copy(isReconnecting = true, error = null)
             repeat(MAX_RECONNECT_ATTEMPTS) { attempt ->
                 delay(RECONNECT_BASE_DELAY_MS shl attempt)
-                val ok = try {
-                    remoteSession.reconnect(tv.host)
-                } catch (e: Exception) {
-                    false
-                }
-                if (ok) {
+                if (tryReconnect(tv)) {
                     _uiState.value = _uiState.value.copy(isReconnecting = false)
                     return@launch
                 }
                 Log.w(TAG, "Reconnect attempt ${attempt + 1} failed")
             }
-            _uiState.value = _uiState.value.copy(
-                mode = RemoteMode.Discovery,
-                isReconnecting = false,
-                isDiscovering = false,
-                error = "Connection to TV lost"
-            )
+            returnToDiscovery(error = "Connection to TV lost")
         }
+    }
+
+    /** Re-opens the session with [tv] without pairing; false if that fails for any reason. */
+    private suspend fun tryReconnect(tv: DiscoveredTv): Boolean =
+        try {
+            remoteSession.reconnect(tv.host)
+        } catch (e: Exception) {
+            Log.w(TAG, "Reconnect to ${tv.displayName} failed", e)
+            false
+        }
+
+    /** Shows the TV list with [error], clearing everything about the TV that was being paired with or used. */
+    private fun returnToDiscovery(error: String?) {
+        _uiState.value = _uiState.value.copy(
+            mode = RemoteMode.Discovery,
+            isDiscovering = false,
+            isReconnecting = false,
+            awaitingCode = false,
+            pairingCode = "",
+            error = error
+        )
     }
 
     fun startDiscovery() {
@@ -345,13 +348,7 @@ class RemoteViewModel @Inject constructor(
         pairingWatchJob?.cancel()
         remoteSession.close()
         if (removeTv) repository.removeDiscovered(tv.host)
-        _uiState.value = _uiState.value.copy(
-            mode = RemoteMode.Discovery,
-            isDiscovering = false,
-            awaitingCode = false,
-            pairingCode = "",
-            error = message
-        )
+        returnToDiscovery(error = message)
     }
 
     /**
@@ -371,13 +368,7 @@ class RemoteViewModel @Inject constructor(
                     Log.i(TAG, "${tv.displayName} stopped answering during pairing")
                     remoteSession.close()
                     repository.removeDiscovered(tv.host)
-                    _uiState.value = _uiState.value.copy(
-                        mode = RemoteMode.Discovery,
-                        isDiscovering = false,
-                        awaitingCode = false,
-                        pairingCode = "",
-                        error = "${tv.displayName} went offline while pairing. Turn it on and try again."
-                    )
+                    returnToDiscovery(error = "${tv.displayName} went offline while pairing. Turn it on and try again.")
                     return@launch
                 }
             }
@@ -405,13 +396,7 @@ class RemoteViewModel @Inject constructor(
         reconnectJob?.cancel()
         pairingWatchJob?.cancel()
         remoteSession.close()
-        _uiState.value = _uiState.value.copy(
-            mode = RemoteMode.Discovery,
-            isDiscovering = false,
-            awaitingCode = false,
-            pairingCode = "",
-            error = null
-        )
+        returnToDiscovery(error = null)
     }
 
     /** Leaves the current TV for good: stops any retry, forgets it so it isn't reconnected on launch, and returns to discovery. */
@@ -419,14 +404,7 @@ class RemoteViewModel @Inject constructor(
         reconnectJob?.cancel()
         lastTvStore.clear()
         // Mode changes first so the Disconnected from close() doesn't start a reconnect
-        _uiState.value = _uiState.value.copy(
-            mode = RemoteMode.Discovery,
-            isDiscovering = false,
-            isReconnecting = false,
-            awaitingCode = false,
-            pairingCode = "",
-            error = null
-        )
+        returnToDiscovery(error = null)
         remoteSession.close()
     }
 

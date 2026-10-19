@@ -21,7 +21,6 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
@@ -236,7 +235,7 @@ private fun MediaButtons(onKey: (TvKey, KeyAction) -> Unit, enabled: Boolean) {
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .clip(RoundedCornerShape(28.dp))
+            .clip(MaterialTheme.shapes.extraLarge)
             .background(MaterialTheme.colorScheme.surfaceVariant)
             .padding(8.dp),
         horizontalArrangement = Arrangement.SpaceEvenly,
@@ -472,7 +471,7 @@ private fun TextEntryDialog(viewModel: RemoteViewModel, onDismiss: () -> Unit) {
         val initial = field?.value.orEmpty()
         mutableStateOf(TextFieldValue(initial, selection = TextRange(initial.length)))
     }
-    val focusRequester = remember { FocusRequester() }
+    val focusRequester = rememberFocusOnOpen()
     val context = LocalContext.current
 
     // The TV's text box went away (another app, the TV's idle timeout, a lost connection): typing here would go nowhere
@@ -489,14 +488,11 @@ private fun TextEntryDialog(viewModel: RemoteViewModel, onDismiss: () -> Unit) {
         viewModel.tvTextAccepted.collect { value = TextFieldValue(it, selection = TextRange(it.length)) }
     }
 
-    // Wait for the field to be laid out before asking for focus, or there is nothing to focus yet
     LaunchedEffect(Unit) {
         viewModel.beginTextEntry(value.text)
         // A focused text box that hasn't opened the TV's keyboard yet (e.g. SmartTube's search the first
         // time) takes no text edits. Pressing OK on it opens the keyboard, and the text session follows.
         if (field != null && !field.acceptsText) viewModel.sendKey(TvKey.OK)
-        withFrameNanos { }
-        focusRequester.requestFocus()
     }
 
     TextEntryDialogContent(
@@ -546,13 +542,10 @@ private fun TextEntryDialogContent(
                     keyboardActions = KeyboardActions(onSend = { onEnter() })
                 )
                 if (!acceptsText) {
-                    Text(
+                    DialogHint(
                         "The TV's text box hasn't opened its keyboard yet, so OK was pressed on it. If nothing " +
                             "appears, press OK on the text box on the TV yourself. If it still doesn't type, " +
-                            "this TV or app ignores typing: use the TV's on-screen keyboard with the D-pad.",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        modifier = Modifier.padding(top = 8.dp)
+                            "this TV or app ignores typing: use the TV's on-screen keyboard with the D-pad."
                     )
                 }
             }
@@ -566,11 +559,7 @@ private fun TextEntryDialogContent(
 @Composable
 private fun YouTubeSearchDialog(onSearch: (String) -> Unit, onDismiss: () -> Unit) {
     var query by remember { mutableStateOf("") }
-    val focusRequester = remember { FocusRequester() }
-    LaunchedEffect(Unit) {
-        withFrameNanos { }
-        focusRequester.requestFocus()
-    }
+    val focusRequester = rememberFocusOnOpen()
     YouTubeSearchDialogContent(
         query = query,
         onQueryChange = { query = it },
@@ -604,16 +593,34 @@ private fun YouTubeSearchDialogContent(
                     keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
                     keyboardActions = KeyboardActions(onSearch = { if (query.isNotBlank()) onSearch() })
                 )
-                Text(
-                    "YouTube's own keyboard can't be typed into from a phone, so this opens the results on the TV.",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.padding(top = 8.dp)
-                )
+                DialogHint("YouTube's own keyboard can't be typed into from a phone, so this opens the results on the TV.")
             }
         },
         confirmButton = { TextButton(onClick = onSearch, enabled = query.isNotBlank()) { Text("Search") } },
         dismissButton = { TextButton(onClick = onDismiss) { Text("Close") } }
+    )
+}
+
+/** A [FocusRequester] that takes focus once its field is laid out, so the keyboard opens with the dialog. */
+@Composable
+private fun rememberFocusOnOpen(): FocusRequester {
+    val focusRequester = remember { FocusRequester() }
+    // Wait for the field to be laid out before asking for focus, or there is nothing to focus yet
+    LaunchedEffect(Unit) {
+        withFrameNanos { }
+        focusRequester.requestFocus()
+    }
+    return focusRequester
+}
+
+/** A note under a dialog's text field. */
+@Composable
+private fun DialogHint(text: String) {
+    Text(
+        text,
+        style = MaterialTheme.typography.bodySmall,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+        modifier = Modifier.padding(top = 8.dp)
     )
 }
 
@@ -626,7 +633,7 @@ private fun PadModeToggle(selected: PadMode, onSelect: (PadMode) -> Unit) {
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .clip(RoundedCornerShape(24.dp))
+            .clip(CircleShape)
             .background(MaterialTheme.colorScheme.surfaceVariant)
             .padding(4.dp),
     ) {
@@ -635,7 +642,7 @@ private fun PadModeToggle(selected: PadMode, onSelect: (PadMode) -> Unit) {
             Box(
                 modifier = Modifier
                     .weight(1f)
-                    .clip(RoundedCornerShape(20.dp))
+                    .clip(CircleShape)
                     .background(if (active) MaterialTheme.colorScheme.primary else Color.Transparent)
                     .clickable { onSelect(mode) }
                     .padding(vertical = 10.dp),
