@@ -38,12 +38,13 @@ class SubnetScanner @Inject constructor(
         Log.d(TAG_SUBNET, "Probing ${candidates.size} addresses for port $TV_REMOTE_PORT")
 
         val gate = Semaphore(MAX_PARALLEL_PROBES)
+        val started = System.currentTimeMillis()
         coroutineScope {
             candidates
                 .map { host -> async { gate.withPermit { host.takeIf { accepts(it) } } } }
                 .awaitAll()
                 .filterNotNull()
-        }
+        }.also { Log.d(TAG_SUBNET, "Port $TV_REMOTE_PORT open on $it after ${System.currentTimeMillis() - started} ms") }
     }
 
     private fun accepts(host: String): Boolean = try {

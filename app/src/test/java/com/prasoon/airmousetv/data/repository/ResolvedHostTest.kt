@@ -41,10 +41,8 @@ class ResolvedHostTest {
     }
 
     @Test
-    fun onlyALinkLocalAddress_isStillBetterThanNothing() {
-        val host = pickHost(listOf(linkLocal6))
-        assertNotNull(host)
-        assertTrue(host!!.startsWith("fe80"))
+    fun onlyALinkLocalAddress_givesNull() {
+        assertNull(pickHost(listOf(linkLocal6)))
     }
 
     @Test
