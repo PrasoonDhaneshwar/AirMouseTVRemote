@@ -507,8 +507,18 @@ class RemoteSessionManager @Inject constructor(
                 }
             }
             message.hasRemoteStart() -> Log.d(TAG, "RemoteStart: ${message.remoteStart.started}")
-            message.hasRemoteError() -> Log.w(TAG, "RemoteError from TV: ${message.remoteError}")
-            else -> Log.d(TAG, "Unhandled RemoteMessage (${bytes.size} bytes)")
+            message.hasRemoteError() -> {
+                Log.w(TAG, "RemoteError from TV: ${message.remoteError}")
+                note("TV reported an error: ${message.remoteError.toString().trim().replace('\n', ' ')}")
+            }
+            message.hasRemoteSetVolumeLevel() -> message.remoteSetVolumeLevel.let {
+                // Reported by the TV when its volume changes; none arriving after a volume key means the key had no effect
+                note("TV volume ${it.volumeLevel}/${it.volumeMax} muted=${it.volumeMuted} player=${it.playerModel}")
+            }
+            else -> {
+                Log.d(TAG, "Unhandled RemoteMessage (${bytes.size} bytes)")
+                note("unhandled TV message (${bytes.size} bytes)")
+            }
         }
     }
 

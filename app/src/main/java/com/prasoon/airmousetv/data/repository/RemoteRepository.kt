@@ -164,6 +164,7 @@ class RemoteRepository @Inject constructor(
 
     /** Sends one key tap to the TV over the active remote session. */
     suspend fun sendKey(key: TvKey, action: KeyAction = KeyAction.TAP) {
+        if (key == TvKey.VOLUME_UP || key == TvKey.VOLUME_DOWN) session.note("sent $key $action")
         session.send(RemoteMessageEncoder.encodeKeyPress(key, action))
     }
 
