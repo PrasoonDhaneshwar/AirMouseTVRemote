@@ -46,6 +46,7 @@ class RemoteRepository @Inject constructor(
     private val networkMonitor: NetworkMonitor,
     private val nsdDiscoveryEngine: NsdDiscoveryEngine,
     private val tvPortScanner: TvPortScanner,
+    private val subnetScanner: SubnetScanner,
     private val session: RemoteSessionManager
 ) : NsdDiscoveryListener {
 
@@ -124,6 +125,36 @@ class RemoteRepository @Inject constructor(
                 scansInFlight.remove(tv.host)
             }
         }
+    }
+
+    /**
+     * Lists the TV at [host], unless that address is already listed, and returns the entry. It is
+     * named "TV at <address>" until an HTTP lookup finds its real name.
+     */
+    fun addByAddress(host: String): DiscoveredTv {
+        _discoveredTvs.value.firstOrNull { it.host == host }?.let { return it }
+        val tv = DiscoveredTv(name = host, friendlyName = "TV at $host", host = host, port = TV_REMOTE_PORT)
+        updateDiscoveredList(tv)
+        if (scansInFlight.add(host)) {
+            scope.launch {
+                try {
+                    tvPortScanner.fetchFriendlyName(host)?.let { updateDiscoveredList(tv.copy(friendlyName = it)) }
+                } finally {
+                    scansInFlight.remove(host)
+                }
+            }
+        }
+        return tv
+    }
+
+    /**
+     * Probes the whole local network for TVs and lists those found. For networks that block the
+     * multicast discovery relies on.
+     */
+    suspend fun scanSubnet() {
+        val hosts = subnetScanner.findTvHosts()
+        session.note("subnet scan found ${hosts.size} TV(s)")
+        hosts.forEach { addByAddress(it) }
     }
 
     /** Adds [updatedTv], or replaces the entry already listed for the same TV. */

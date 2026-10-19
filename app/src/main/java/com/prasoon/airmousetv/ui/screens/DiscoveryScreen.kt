@@ -27,21 +27,31 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.SignalWifi4Bar
 import androidx.compose.material.icons.filled.Tv
+import androidx.compose.foundation.text.KeyboardActions
+import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
@@ -49,6 +59,7 @@ import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.repeatOnLifecycle
+import com.prasoon.airmousetv.data.api.parseIpv4
 import com.prasoon.airmousetv.data.model.DiscoveredTv
 import com.prasoon.airmousetv.data.model.RemoteUiState
 import com.prasoon.airmousetv.presentation.RemoteViewModel
@@ -84,6 +95,7 @@ fun DiscoveryScreen(
         uiState = uiState,
         onRefresh = viewModel::retryDiscovery,
         onTvClick = onTvSelected,
+        onAddByIp = viewModel::addTvByAddress,
         modifier = modifier
     )
 }
@@ -93,8 +105,10 @@ private fun DiscoveryContent(
     uiState: RemoteUiState,
     onRefresh: () -> Unit,
     onTvClick: (DiscoveredTv) -> Unit,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    onAddByIp: (String) -> Unit = {}
 ) {
+    var showAddDialog by remember { mutableStateOf(false) }
     val scanning = uiState.isDiscovering
     val checking = uiState.isCheckingTv
     val found = uiState.discoveredTvs.isNotEmpty()
@@ -141,7 +155,7 @@ private fun DiscoveryContent(
                     checking -> "Making sure it is awake..."
                     scanning -> "Searching for compatible displays..."
                     found -> "Tap a display to connect."
-                    else -> "Make sure your TV is on and connected to the same Wi-Fi, then tap refresh."
+                    else -> "Make sure your TV is on and connected to the same Wi-Fi, then tap refresh, or add it by IP address."
                 },
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -189,8 +203,57 @@ private fun DiscoveryContent(
                     TargetItem(tv = tv, enabled = !checking, onClick = { onTvClick(tv) })
                 }
             }
+
+            TextButton(onClick = { showAddDialog = true }, enabled = !checking) {
+                Text("Add by IP address")
+            }
         }
     }
+
+    if (showAddDialog) {
+        AddByIpDialog(
+            onAdd = {
+                showAddDialog = false
+                onAddByIp(it)
+            },
+            onDismiss = { showAddDialog = false }
+        )
+    }
+}
+
+/** Asks for the TV's IPv4 address, for networks where it can't be found automatically. */
+@Composable
+private fun AddByIpDialog(onAdd: (String) -> Unit, onDismiss: () -> Unit) {
+    var text by remember { mutableStateOf("") }
+    val address = parseIpv4(text)
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Add TV by IP address") },
+        text = {
+            Column {
+                Text(
+                    "Find it on the TV under Settings > Network, then enter it here.",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                Spacer(Modifier.height(12.dp))
+                OutlinedTextField(
+                    value = text,
+                    onValueChange = { text = it },
+                    label = { Text("IP address") },
+                    placeholder = { Text("192.168.1.20") },
+                    singleLine = true,
+                    isError = text.isNotBlank() && address == null,
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri, imeAction = ImeAction.Done),
+                    keyboardActions = KeyboardActions(onDone = { address?.let(onAdd) })
+                )
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = { address?.let(onAdd) }, enabled = address != null) { Text("Connect") }
+        },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } }
+    )
 }
 
 /** A pulsing dot while busy; a steady one, in [color], once done. */

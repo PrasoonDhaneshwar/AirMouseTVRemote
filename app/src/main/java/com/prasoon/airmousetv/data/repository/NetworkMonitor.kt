@@ -13,6 +13,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.channels.awaitClose
 import kotlinx.coroutines.flow.*
+import java.net.Inet4Address
 import javax.inject.Inject
 import javax.inject.Singleton
 
@@ -49,6 +50,18 @@ class NetworkMonitor @Inject constructor(
         } catch (e: Exception) {
             Log.e(TAG, "Network check failed", e)
         }
+    }
+
+    /** The phone's IPv4 address on the current network and its prefix length; null if it has none. */
+    fun localIpv4(): Pair<ByteArray, Int>? = try {
+        val network = connectivityManager.activeNetwork
+        val link = network?.let { connectivityManager.getLinkProperties(it) }
+        link?.linkAddresses
+            ?.firstOrNull { it.address is Inet4Address }
+            ?.let { it.address.address to it.prefixLength }
+    } catch (e: Exception) {
+        Log.w(TAG, "Couldn't read the local address", e)
+        null
     }
 
     private fun currentNetworkConnected(): Boolean {

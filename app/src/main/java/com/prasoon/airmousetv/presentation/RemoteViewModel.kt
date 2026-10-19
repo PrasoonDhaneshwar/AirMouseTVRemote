@@ -5,6 +5,7 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.prasoon.airmousetv.data.api.PAIRING_CODE_LENGTH
 import com.prasoon.airmousetv.data.api.normalizePairingCode
+import com.prasoon.airmousetv.data.api.parseIpv4
 import com.prasoon.airmousetv.data.model.ConnectionState
 import com.prasoon.airmousetv.data.model.DiscoveredTv
 import com.prasoon.airmousetv.data.model.KeyAction
@@ -16,6 +17,7 @@ import com.prasoon.airmousetv.data.repository.RemoteRepository
 import com.prasoon.airmousetv.data.repository.RemoteSessionManager
 import com.prasoon.airmousetv.data.repository.TvUnreachableException
 import dagger.hilt.android.lifecycle.HiltViewModel
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
@@ -160,6 +162,8 @@ class RemoteViewModel @Inject constructor(
         scanTimeoutJob?.cancel()
         scanTimeoutJob = viewModelScope.launch {
             delay(SCAN_WINDOW_MS)
+            // Multicast discovery found nothing: the network may drop it, so sweep the network instead
+            if (repository.discoveredTvs.value.isEmpty()) scanSubnet()
             _uiState.value = _uiState.value.copy(isDiscovering = false)
         }
 
@@ -231,7 +235,10 @@ class RemoteViewModel @Inject constructor(
                 delay(800)  // Let NSD fully reset
 
                 repository.startDiscovery()
+                // The refresh was asked for, so also sweep the network, alongside the multicast wait
+                val sweep = launch { scanSubnet() }
                 delay(SCAN_WINDOW_MS)
+                sweep.join()
 
                 if (repository.discoveredTvs.value.isEmpty()) {
                     _uiState.value = _uiState.value.copy(error = "No TVs found. Try again or check Wi-Fi.")
@@ -241,6 +248,23 @@ class RemoteViewModel @Inject constructor(
                 _uiState.value = _uiState.value.copy(isRefreshing = false, isDiscovering = false)
             }
         }
+    }
+
+    /** Looks for TVs by probing the network directly; a failure only means that nothing more is found. */
+    private suspend fun scanSubnet() {
+        try {
+            repository.scanSubnet()
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            Log.w(TAG, "Subnet scan failed", e)
+        }
+    }
+
+    /** Lists the TV at [address], typed by the user, and starts connecting to it. Ignored if it isn't an IPv4 address. */
+    fun addTvByAddress(address: String) {
+        val host = parseIpv4(address) ?: return
+        selectTv(repository.addByAddress(host))
     }
 
     fun stopDiscovery() {
