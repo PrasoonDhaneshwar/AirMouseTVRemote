@@ -31,4 +31,6 @@ data class RemoteUiState(
     val imeField: ImeField? = null,
     /** Package of the app in front on the TV, or null if it has not reported one. */
     val foregroundApp: String? = null,
+    /** True when the connected TV is known to leave the network once switched off, so the app can't turn it back on. */
+    val powerOffIsFinal: Boolean = false,
 )

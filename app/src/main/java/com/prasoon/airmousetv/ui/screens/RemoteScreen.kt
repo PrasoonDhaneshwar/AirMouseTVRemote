@@ -132,7 +132,13 @@ fun RemoteScreen(viewModel: RemoteViewModel) {
             padMode = it
             uiPrefs.edit().putString("pad_mode", it.name).apply()
         },
-        onKey = viewModel::sendKey,
+        onKey = { key, action ->
+            // Still sent: the user may mean it, but should know the app can't undo it
+            if (key == TvKey.POWER && action == KeyAction.TAP && uiState.powerOffIsFinal) {
+                Toast.makeText(context, "Once off, this TV can only be turned on with its own remote", Toast.LENGTH_LONG).show()
+            }
+            viewModel.sendKey(key, action)
+        },
         onShowKeyboard = {
             if (uiState.imeField != null) {
                 showTextEntry = true

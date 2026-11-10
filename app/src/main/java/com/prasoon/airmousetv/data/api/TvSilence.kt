@@ -36,6 +36,22 @@ fun needsAwakeCheck(now: Long, lastHeardAt: Long, tvPings: Boolean, lastPowerAt:
 fun mayBeSwitchingOff(lastHeardAt: Long, lastPowerAt: Long?): Boolean =
     lastPowerAt != null && lastHeardAt < lastPowerAt + STILL_TALKING_AFTER_POWER_MS
 
+/**
+ * How long after a Power tap a lost connection still counts as the TV switching off. Covers the
+ * slowest way the loss is noticed: a TV that never pinged is only given up after 90 s of silence,
+ * followed by about 20 s of reconnect attempts.
+ */
+const val POWER_OFF_DROP_WINDOW_MS = 180_000L
+
+/**
+ * True when a connection lost at [now] was most likely lost because the TV switched off after the
+ * Power tap at [lastPowerAt]: the tap was recent and the TV went quiet soon after it. If the TV is
+ * also unreachable then, it leaves the network when off, and the app can't turn it back on.
+ */
+fun lostAfterPowerOff(now: Long, lastHeardAt: Long, lastPowerAt: Long?): Boolean =
+    lastPowerAt != null && now - lastPowerAt <= POWER_OFF_DROP_WINDOW_MS &&
+        mayBeSwitchingOff(lastHeardAt, lastPowerAt)
+
 /** True when a Power tap at [now] comes too soon after the one at [lastPowerAt] and should be dropped. */
 fun isRepeatPowerTap(now: Long, lastPowerAt: Long?): Boolean =
     lastPowerAt != null && now - lastPowerAt < POWER_REPEAT_GUARD_MS

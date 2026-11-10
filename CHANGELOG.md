@@ -4,6 +4,11 @@ All notable changes to Air Mouse TV Remote. Versions match the git tags and GitH
 
 ## [Unreleased]
 
+### Added
+- When a TV leaves the network as it switches off (usually one with an IR remote), the app says it
+  can't turn it back on and points to the TV's own remote or its network standby setting. It
+  remembers this and warns the next time Power is tapped for that TV.
+
 ### Fixed
 - A TV switched off from the app no longer switches itself off again when it is next turned on.
   Key presses aren't sent to a TV that has left the network, presses still waiting to go out are

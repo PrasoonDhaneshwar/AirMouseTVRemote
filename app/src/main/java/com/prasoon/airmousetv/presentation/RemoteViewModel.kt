@@ -1,9 +1,13 @@
 package com.prasoon.airmousetv.presentation
 
+import android.os.SystemClock
 import android.util.Log
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.prasoon.airmousetv.data.api.PAIRING_CODE_LENGTH
+import com.prasoon.airmousetv.data.api.STILL_TALKING_AFTER_POWER_MS
+import com.prasoon.airmousetv.data.api.lostAfterPowerOff
+import com.prasoon.airmousetv.data.api.mayBeSwitchingOff
 import com.prasoon.airmousetv.data.api.normalizePairingCode
 import com.prasoon.airmousetv.data.api.parseIpv4
 import com.prasoon.airmousetv.data.model.ConnectionState
@@ -16,6 +20,7 @@ import com.prasoon.airmousetv.data.repository.LastTvStore
 import com.prasoon.airmousetv.data.repository.RemoteRepository
 import com.prasoon.airmousetv.data.repository.RemoteSessionManager
 import com.prasoon.airmousetv.data.repository.TvUnreachableException
+import com.prasoon.airmousetv.data.repository.WakeSupportStore
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Job
@@ -49,6 +54,13 @@ private const val MAX_RECONNECT_ATTEMPTS = 4
 private const val RECONNECT_BASE_DELAY_MS = 1000L
 
 /**
+ * How long after a Power tap to look at whether the TV stayed on the network: past
+ * [STILL_TALKING_AFTER_POWER_MS] plus a ping interval and some margin, so a TV in network standby
+ * has pinged by then.
+ */
+private const val STAYS_ON_NETWORK_CHECK_MS = STILL_TALKING_AFTER_POWER_MS + 10_000L
+
+/**
  * Drives the whole UI flow: discovery -> connect/pair -> remote.
  * Discovery goes through [RemoteRepository]; the connection itself through [RemoteSessionManager].
  */
@@ -56,7 +68,8 @@ private const val RECONNECT_BASE_DELAY_MS = 1000L
 class RemoteViewModel @Inject constructor(
     private val repository: RemoteRepository,
     private val remoteSession: RemoteSessionManager,
-    private val lastTvStore: LastTvStore
+    private val lastTvStore: LastTvStore,
+    private val wakeSupportStore: WakeSupportStore
 ) : ViewModel() {
 
     private val _uiState = MutableStateFlow(RemoteUiState())
@@ -79,6 +92,9 @@ class RemoteViewModel @Inject constructor(
 
     /** Retry loop for a dropped session; non-null/active means we are reconnecting. */
     private var reconnectJob: Job? = null
+
+    /** Watches whether the TV stays on the network after a Power tap; see [watchStaysOnNetwork]. */
+    private var powerWatchJob: Job? = null
 
     init {
         observeConnectionState()
@@ -128,7 +144,45 @@ class RemoteViewModel @Inject constructor(
                 }
                 Log.w(TAG, "Reconnect attempt ${attempt + 1} failed")
             }
-            returnToDiscovery(error = "Connection to TV lost")
+            returnToDiscovery(error = lostConnectionMessage(tv))
+        }
+    }
+
+    /**
+     * Why the session with [tv] couldn't be restored. If it was lost right after a Power tap and the
+     * TV is now off the network, the TV leaves the network when switched off: that is remembered,
+     * and the user is told to use the TV's own remote.
+     */
+    private suspend fun lostConnectionMessage(tv: DiscoveredTv): String {
+        val afterPowerOff = lostAfterPowerOff(
+            now = SystemClock.elapsedRealtime(),
+            lastHeardAt = remoteSession.lastHeardAt,
+            lastPowerAt = remoteSession.lastPowerAt
+        )
+        if (!afterPowerOff || remoteSession.isReachable(tv.host)) return "Connection to TV lost"
+        remoteSession.note("TV left the network after switching off; it can't be woken from the app")
+        wakeSupportStore.setCannotWake(tv.name, true)
+        return "${tv.displayName} left the network when it switched off, so the app can't turn it back on. " +
+            "Use the TV's own remote. To wake it from the app, turn on network standby in the TV's power settings."
+    }
+
+    /**
+     * After a Power tap on a TV remembered as leaving the network when off: if the session is
+     * still up well afterwards and the TV kept talking, it stays on the network (network standby
+     * was turned on, or it was being switched on), so the warning is no longer needed.
+     */
+    private fun watchStaysOnNetwork(tv: DiscoveredTv) {
+        val tappedAt = remoteSession.lastPowerAt ?: return
+        powerWatchJob?.cancel()
+        powerWatchJob = viewModelScope.launch {
+            val dropped = withTimeoutOrNull(STAYS_ON_NETWORK_CHECK_MS) {
+                remoteSession.connectionState.first { it != ConnectionState.Connected }
+            }
+            if (dropped == null && !mayBeSwitchingOff(remoteSession.lastHeardAt, tappedAt)) {
+                remoteSession.note("TV stayed on the network after Power; it can be woken from the app")
+                wakeSupportStore.setCannotWake(tv.name, false)
+                _uiState.value = _uiState.value.copy(powerOffIsFinal = false)
+            }
         }
     }
 
@@ -289,7 +343,8 @@ class RemoteViewModel @Inject constructor(
                         if (tv != null) {
                             lastTvStore.save(tv)
                             _uiState.value = _uiState.value.copy(
-                                mode = RemoteMode.Connected(tv)
+                                mode = RemoteMode.Connected(tv),
+                                powerOffIsFinal = wakeSupportStore.cannotWake(tv.name)
                             )
                         }
                     }
@@ -465,7 +520,11 @@ class RemoteViewModel @Inject constructor(
     fun sendKey(key: TvKey, action: KeyAction = KeyAction.TAP) {
         viewModelScope.launch {
             try {
-                repository.sendKey(key, action)
+                val sent = repository.sendKey(key, action)
+                val tv = (_uiState.value.mode as? RemoteMode.Connected)?.tv
+                if (sent && key == TvKey.POWER && action == KeyAction.TAP && tv != null && _uiState.value.powerOffIsFinal) {
+                    watchStaysOnNetwork(tv)
+                }
             } catch (e: Exception) {
                 Log.e(TAG, "sendKey failed", e)
                 _uiState.value = _uiState.value.copy(error = "Send failed: ${e.message}")

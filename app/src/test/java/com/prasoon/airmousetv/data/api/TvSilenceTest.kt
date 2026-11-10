@@ -36,6 +36,22 @@ class TvSilenceTest {
     }
 
     @Test
+    fun `a connection lost soon after Power, with the TV quiet since, is a power-off`() {
+        assertTrue(lostAfterPowerOff(now = 160_000, lastHeardAt = 101_000, lastPowerAt = 100_000))
+    }
+
+    @Test
+    fun `a connection lost long after Power is not a power-off`() {
+        assertFalse(lostAfterPowerOff(now = 100_000 + POWER_OFF_DROP_WINDOW_MS + 1, lastHeardAt = 101_000, lastPowerAt = 100_000))
+    }
+
+    @Test
+    fun `a connection lost while the TV kept talking after Power is not a power-off`() {
+        assertFalse(lostAfterPowerOff(now = 160_000, lastHeardAt = 150_000, lastPowerAt = 100_000))
+        assertFalse(lostAfterPowerOff(now = 160_000, lastHeardAt = 150_000, lastPowerAt = null))
+    }
+
+    @Test
     fun `a Power tap soon after the last one is a repeat`() {
         assertTrue(isRepeatPowerTap(now = 100_000 + POWER_REPEAT_GUARD_MS - 1, lastPowerAt = 100_000))
     }
