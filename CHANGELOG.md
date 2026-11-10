@@ -4,15 +4,25 @@ All notable changes to Air Mouse TV Remote. Versions match the git tags and GitH
 
 ## [Unreleased]
 
+## [1.3] - 2026-11-10
+
 ### Added
+- TVs are also found by scanning the local network, for networks that block the multicast
+  discovery: when discovery finds nothing, and whenever the list is refreshed. A TV can also be
+  added by typing its IP address.
 - When a TV leaves the network as it switches off (usually one with an IR remote), the app says it
   can't turn it back on and points to the TV's own remote or its network standby setting. It
   remembers this and warns the next time Power is tapped for that TV.
+
+### Changed
+- Copied diagnostics also record volume keys and the TV's volume replies, the network scan, and
+  when the TV's screen turns on or off.
 
 ### Fixed
 - A TV switched off from the app no longer switches itself off again when it is next turned on.
   Key presses aren't sent to a TV that has left the network, presses still waiting to go out are
   dropped when the connection closes, and a second Power tap within a few seconds is ignored.
+- A TV found both by discovery and by the network scan is listed only once.
 
 ### Internal
 - Opening TLS connections and keeping the client certificate moved out of the session manager into
@@ -73,7 +83,8 @@ All notable changes to Air Mouse TV Remote. Versions match the git tags and GitH
 - Reconnect, and a connection state that shows whether the TV is really reachable.
 - The "Deep Code" dark theme.
 
-[Unreleased]: https://github.com/PrasoonDhaneshwar/AirMouseTVRemote/compare/1.2...HEAD
+[Unreleased]: https://github.com/PrasoonDhaneshwar/AirMouseTVRemote/compare/1.3...HEAD
+[1.3]: https://github.com/PrasoonDhaneshwar/AirMouseTVRemote/compare/1.2...1.3
 [1.2]: https://github.com/PrasoonDhaneshwar/AirMouseTVRemote/compare/1.1...1.2
 [1.1]: https://github.com/PrasoonDhaneshwar/AirMouseTVRemote/compare/1.0...1.1
 [1.0]: https://github.com/PrasoonDhaneshwar/AirMouseTVRemote/releases/tag/1.0

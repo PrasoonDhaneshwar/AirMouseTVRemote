@@ -9,7 +9,7 @@
 ![Jetpack Compose](https://img.shields.io/badge/UI-Jetpack%20Compose-4285F4?logo=jetpackcompose&logoColor=white)
 ![Hilt](https://img.shields.io/badge/DI-Hilt-2C8EBB)
 
-[**⬇️ Download the APK**](https://github.com/PrasoonDhaneshwar/AirMouseTVRemote/releases/download/1.2/AirMouseTVRemote-v1.2.apk)
+[**⬇️ Download the APK**](https://github.com/PrasoonDhaneshwar/AirMouseTVRemote/releases/download/1.3/AirMouseTVRemote-v1.3.apk)
 
 </div>
 
@@ -17,7 +17,7 @@
 
 ## ✨ What it does
 
-- **Finds your TV automatically.** mDNS discovery, with an HTTP name lookup for TVs that don't advertise one, and the last TV remembered so the app reconnects on launch.
+- **Finds your TV automatically.** mDNS discovery, a scan of the local network for networks that block it, and an HTTP name lookup for TVs that don't advertise one. You can also add a TV by its IP address, and the last TV is remembered so the app reconnects on launch.
 - **Pairs like the official app.** Enter the 6-character code shown on the TV once (digits and capital letters on one keyboard), and you're paired. The app remembers the TV's certificate and refuses a different device answering at the same address.
 - **Full remote on one screen.** D-pad or touchpad, OK, Back, Home, volume, mute, power and media controls, with no scrolling. Hold a key for a long press.
 - **Type on the TV.** When a TV search box asks for text, the phone keyboard opens and types straight into it, and the box on the phone follows what the TV really holds.
@@ -34,7 +34,7 @@
 ## 👇 Get started
 
 1. Put your phone and TV on the **same Wi-Fi network**.
-2. [Download the APK](https://github.com/PrasoonDhaneshwar/AirMouseTVRemote/releases/download/1.2/AirMouseTVRemote-v1.2.apk) and install it.
+2. [Download the APK](https://github.com/PrasoonDhaneshwar/AirMouseTVRemote/releases/download/1.3/AirMouseTVRemote-v1.3.apk) and install it.
 3. Open the app and pick your TV from the list.
 4. Type the code shown on the TV screen and tap **Connect Device**.
 5. Start navigating.
