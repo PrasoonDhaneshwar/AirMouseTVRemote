@@ -56,7 +56,9 @@ internal class SessionTvTextPort(
     override val hasTextSession: Boolean get() = session.hasTextSession
     override suspend fun awaitEditSlot() = repository.awaitEditSlot()
     override suspend fun typeEdit(previous: String, current: String) = repository.typeEdit(previous, current)
-    override suspend fun sendEnter() = repository.sendKey(TvKey.ENTER)
+    override suspend fun sendEnter() {
+        repository.sendKey(TvKey.ENTER)
+    }
     override fun note(event: String) = session.note(event)
 }
 

@@ -4,6 +4,11 @@ All notable changes to Air Mouse TV Remote. Versions match the git tags and GitH
 
 ## [Unreleased]
 
+### Fixed
+- A TV switched off from the app no longer switches itself off again when it is next turned on.
+  Key presses aren't sent to a TV that has left the network, presses still waiting to go out are
+  dropped when the connection closes, and a second Power tap within a few seconds is ignored.
+
 ### Internal
 - Opening TLS connections and keeping the client certificate moved out of the session manager into
   its own class, with a test that the certificate survives an app restart.

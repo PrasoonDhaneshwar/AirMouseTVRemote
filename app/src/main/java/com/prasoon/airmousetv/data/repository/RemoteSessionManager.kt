@@ -2,9 +2,12 @@ package com.prasoon.airmousetv.data.repository
 
 import android.content.Context
 import android.content.pm.ApplicationInfo
+import android.os.SystemClock
 import android.util.Log
 import com.prasoon.airmousetv.data.api.FrameCodec
 import com.prasoon.airmousetv.data.api.computePairingSecret
+import com.prasoon.airmousetv.data.api.isRepeatPowerTap
+import com.prasoon.airmousetv.data.api.needsAwakeCheck
 import com.prasoon.airmousetv.data.api.proto.RemoteMessageEncoder
 import com.prasoon.airmousetv.data.model.ConnectionState
 import com.prasoon.airmousetv.data.model.ImeField
@@ -124,6 +127,17 @@ class RemoteSessionManager @Inject constructor(
     /** True once the TV has pinged in this remote session, which tells us it keeps the line busy while idle. */
     @Volatile private var pingSeen = false
 
+    /** When the TV last sent anything on the remote connection, on the [SystemClock.elapsedRealtime] clock. */
+    @Volatile var lastHeardAt = 0L
+        private set
+
+    /** When a Power tap was last sent to the TV, on the [SystemClock.elapsedRealtime] clock; null if none yet. */
+    @Volatile var lastPowerAt: Long? = null
+        private set
+
+    /** Lets one key press at a time check that the TV is awake, so presses made meanwhile wait for the answer. */
+    private val keyGate = Mutex()
+
     /** Features agreed with the TV in the current remote session. */
     private var activeFeatures = SUPPORTED_FEATURES
 
@@ -159,6 +173,8 @@ class RemoteSessionManager @Inject constructor(
      */
     suspend fun connect(host: String, clientName: String = "AirMouseTV") {
         resetConnections(host)
+        // A Power tap on the TV used before says nothing about this one ([reconnect] keeps it, as it is the same TV)
+        lastPowerAt = null
 
         if (tryRemoteSession(host)) return
         startPairing(host, clientName)
@@ -259,6 +275,7 @@ class RemoteSessionManager @Inject constructor(
         // reconnect. Until a first ping, wait longer: some sticks stay quiet when idle, and cutting
         // them off after 15 s made the session reconnect over and over.
         pingSeen = false
+        lastHeardAt = SystemClock.elapsedRealtime()
         conn.socket.soTimeout = UNPINGED_READ_TIMEOUT_MS
         remoteConn = conn
         startReaderLoop(conn) { handleRemoteFrame(conn, it) }
@@ -297,6 +314,45 @@ class RemoteSessionManager @Inject constructor(
             return
         }
         send(payload, conn)
+    }
+
+    /**
+     * Sends a key press on the remote connection, unless the TV may have gone to sleep and turns out
+     * to be off the network: then nothing is sent and the connection is dropped (reported as
+     * Disconnected, which starts the reconnect). [powerTap] marks a Power tap, which is dropped when
+     * it follows the previous one too closely (see [isRepeatPowerTap]). Returns whether it was sent.
+     */
+    suspend fun sendKey(payload: ByteArray, powerTap: Boolean): Boolean = keyGate.withLock {
+        sendKeyLocked(payload, powerTap)
+    }
+
+    /** [sendKey], run while holding [keyGate]. */
+    private suspend fun sendKeyLocked(payload: ByteArray, powerTap: Boolean): Boolean {
+        val conn = remoteConn
+        if (conn == null) {
+            Log.w(TAG, "sendKey() with no remote connection")
+            return false
+        }
+        val now = SystemClock.elapsedRealtime()
+        if (powerTap && isRepeatPowerTap(now, lastPowerAt)) {
+            note("dropped a Power tap right after the previous one")
+            return false
+        }
+        if (needsAwakeCheck(now, lastHeardAt, pingSeen, lastPowerAt)) {
+            val tvHost = host
+            if (tvHost != null && !isReachable(tvHost)) {
+                note("TV silent for ${(now - lastHeardAt) / 1000}s and off the network, dropping a key press and the connection")
+                if (remoteConn === conn) {
+                    closeConn(conn)
+                    remoteConn = null
+                    _connectionState.value = ConnectionState.Disconnected
+                }
+                return false
+            }
+        }
+        if (powerTap) lastPowerAt = SystemClock.elapsedRealtime()
+        send(payload, conn)
+        return true
     }
 
     /** Writes one length-prefixed frame to [conn]; a no-op if it has been closed. */
@@ -449,6 +505,7 @@ class RemoteSessionManager @Inject constructor(
     /** Handles the remote-control handshake (configure, set-active), ping replies and TV notices. */
     private suspend fun handleRemoteFrame(conn: Conn, bytes: ByteArray) {
         if (conn !== remoteConn) return
+        lastHeardAt = SystemClock.elapsedRealtime()
         logFrame("Received", bytes)
         val message = try {
             RemoteMessage.parseFrom(bytes)
@@ -506,7 +563,8 @@ class RemoteSessionManager @Inject constructor(
                     )
                 }
             }
-            message.hasRemoteStart() -> Log.d(TAG, "RemoteStart: ${message.remoteStart.started}")
+            // Sent when the TV's screen turns on (true) or off (false)
+            message.hasRemoteStart() -> note("TV screen ${if (message.remoteStart.started) "on" else "off"}")
             message.hasRemoteError() -> {
                 Log.w(TAG, "RemoteError from TV: ${message.remoteError}")
                 note("TV reported an error: ${message.remoteError.toString().trim().replace('\n', ' ')}")
@@ -587,11 +645,20 @@ class RemoteSessionManager @Inject constructor(
      * Marks [conn] closed first, so the reader loop doesn't report the close as a failure, then
      * closes the socket on the IO scope: closing a TLS socket writes to the network, which must
      * not happen on the caller's (often the main) thread.
+     *
+     * Anything not yet delivered is discarded. Otherwise the phone keeps resending it for minutes
+     * after the close, and a TV that went to sleep resumes its end of the connection when it wakes
+     * and acts on it: Power presses made while it was off switched it straight back off.
      */
     private fun closeConn(conn: Conn?) {
         if (conn == null || conn.closed) return
         conn.closed = true
         scope.launch {
+            try {
+                conn.socket.setSoLinger(true, 0)
+            } catch (e: Exception) {
+                Log.w(TAG, "Couldn't set the socket to discard unsent data", e)
+            }
             try {
                 conn.socket.close()
             } catch (e: Exception) {

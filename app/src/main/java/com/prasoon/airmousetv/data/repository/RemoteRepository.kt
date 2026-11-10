@@ -193,10 +193,14 @@ class RemoteRepository @Inject constructor(
     }
 
 
-    /** Sends one key tap to the TV over the active remote session. */
-    suspend fun sendKey(key: TvKey, action: KeyAction = KeyAction.TAP) {
+    /**
+     * Sends one key press to the TV over the active remote session. Returns false if it wasn't sent:
+     * a repeated Power tap, or a TV that has left the network (see [RemoteSessionManager.sendKey]).
+     */
+    suspend fun sendKey(key: TvKey, action: KeyAction = KeyAction.TAP): Boolean {
         if (key == TvKey.VOLUME_UP || key == TvKey.VOLUME_DOWN) session.note("sent $key $action")
-        session.send(RemoteMessageEncoder.encodeKeyPress(key, action))
+        val powerTap = key == TvKey.POWER && action == KeyAction.TAP
+        return session.sendKey(RemoteMessageEncoder.encodeKeyPress(key, action), powerTap)
     }
 
     /** Package of the app in front on the TV; null until it has reported one. */
