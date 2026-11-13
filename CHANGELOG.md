@@ -4,6 +4,8 @@ All notable changes to Air Mouse TV Remote. Versions match the git tags and GitH
 
 ## [Unreleased]
 
+## [1.4] - 2026-11-13
+
 ### Added
 - The phone's volume buttons change the TV's volume while the remote is open.
 - Keys answer the thumb: a tick and a slight shrink on touch, a firmer buzz and a ring when a hold
@@ -105,7 +107,8 @@ All notable changes to Air Mouse TV Remote. Versions match the git tags and GitH
 - Reconnect, and a connection state that shows whether the TV is really reachable.
 - The "Deep Code" dark theme.
 
-[Unreleased]: https://github.com/PrasoonDhaneshwar/AirMouseTVRemote/compare/1.3...HEAD
+[Unreleased]: https://github.com/PrasoonDhaneshwar/AirMouseTVRemote/compare/1.4...HEAD
+[1.4]: https://github.com/PrasoonDhaneshwar/AirMouseTVRemote/compare/1.3...1.4
 [1.3]: https://github.com/PrasoonDhaneshwar/AirMouseTVRemote/compare/1.2...1.3
 [1.2]: https://github.com/PrasoonDhaneshwar/AirMouseTVRemote/compare/1.1...1.2
 [1.1]: https://github.com/PrasoonDhaneshwar/AirMouseTVRemote/compare/1.0...1.1
