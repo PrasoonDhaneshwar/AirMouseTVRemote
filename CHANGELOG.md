@@ -4,6 +4,10 @@ All notable changes to Air Mouse TV Remote. Versions match the git tags and GitH
 
 ## [Unreleased]
 
+### Fixed
+- A TV that is on but idle is still found. While no TV is listed, the app now checks the network
+  again every 10 seconds instead of only once.
+
 ## [1.3] - 2026-11-10
 
 ### Added

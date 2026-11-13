@@ -40,6 +40,14 @@ private const val TAG = "RemoteViewModel"
 /** How long a scan shows as "scanning" before it settles into found / nothing found. */
 private const val SCAN_WINDOW_MS = 8000L
 
+/**
+ * How often the network is swept again while no TV is listed. An idle Google TV can stop answering
+ * multicast discovery while its remote port still answers (seen on a Google TV: it only showed up
+ * once YouTube was started on it), so the sweep is what finds it. A sweep takes about 2 s, so this
+ * makes the TV appear within seconds without scanning non-stop.
+ */
+private const val RESWEEP_INTERVAL_MS = 10_000L
+
 /** How long a TV gets to show its pairing code, or accept us, before the attempt is abandoned. */
 private const val PAIRING_RESPONSE_TIMEOUT_MS = 15_000L
 
@@ -219,6 +227,12 @@ class RemoteViewModel @Inject constructor(
             // Multicast discovery found nothing: the network may drop it, so sweep the network instead
             if (repository.discoveredTvs.value.isEmpty()) scanSubnet()
             _uiState.value = _uiState.value.copy(isDiscovering = false)
+            // Keep sweeping, quietly, for as long as nothing is listed and the list is showing
+            // (stopDiscovery cancels this). A refresh runs its own sweep, so skip while one is going
+            while (true) {
+                delay(RESWEEP_INTERVAL_MS)
+                if (repository.discoveredTvs.value.isEmpty() && !_uiState.value.isRefreshing) scanSubnet()
+            }
         }
 
         // Cancel old collector, start new one
