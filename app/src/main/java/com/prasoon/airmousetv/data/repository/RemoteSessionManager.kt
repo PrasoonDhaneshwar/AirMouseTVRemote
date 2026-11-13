@@ -418,7 +418,7 @@ class RemoteSessionManager @Inject constructor(
             if (message.status == OuterMessage.Status.STATUS_BAD_SECRET) {
                 // The user can type the code again on the same connection
                 phase = Phase.AWAIT_CODE
-                _connectionState.value = ConnectionState.Error("Wrong pairing code")
+                _connectionState.value = ConnectionState.Error("Wrong pairing code", wrongCode = true)
             } else {
                 // Retrying the same handshake can't help; end this attempt
                 val reason = when (message.status) {
@@ -482,7 +482,7 @@ class RemoteSessionManager @Inject constructor(
         val secret = computePairingSecret(code, clientKey, serverKey)
         if (secret == null) {
             Log.w(TAG, "Pairing code rejected locally (length, characters or checksum)")
-            _connectionState.value = ConnectionState.Error("Wrong pairing code")
+            _connectionState.value = ConnectionState.Error("Wrong pairing code", wrongCode = true)
             return
         }
         phase = Phase.AWAIT_SECRET_ACK

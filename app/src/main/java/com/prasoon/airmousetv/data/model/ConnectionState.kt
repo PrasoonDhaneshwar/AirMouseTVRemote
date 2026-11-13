@@ -19,6 +19,13 @@ sealed class ConnectionState {
      *
      * [id] makes two identical failures distinct values, so a StateFlow doesn't conflate a
      * repeat (e.g. entering a wrong code twice) into a single emission.
+     *
+     * [wrongCode] marks the one failure the user can fix by typing again: the TV is still showing
+     * its code and the pairing connection stays open.
      */
-    data class Error(val message: String, val id: Long = System.nanoTime()) : ConnectionState()
+    data class Error(
+        val message: String,
+        val wrongCode: Boolean = false,
+        val id: Long = System.nanoTime()
+    ) : ConnectionState()
 }

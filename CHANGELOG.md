@@ -4,6 +4,24 @@ All notable changes to Air Mouse TV Remote. Versions match the git tags and GitH
 
 ## [Unreleased]
 
+### Added
+- The phone's volume buttons change the TV's volume while the remote is open.
+- Keys answer the thumb: a tick and a slight shrink on touch, a firmer buzz and a ring when a hold
+  starts. The touchpad shows a dot under the finger and lights the arrow for each step it sends.
+- A one-time tip on the remote: "Hold a key to repeat it."
+- Screens fade into each other instead of cutting, and follow Android's "Remove animations" setting.
+
+### Changed
+- New look for every screen. The D-pad is larger and sits in the middle of the remote with a filled
+  OK key; media and volume moved below it.
+- Pairing shows where the code appears on the TV and connects by itself on the sixth character. A
+  wrong code clears itself for the next try, and a TV that doesn't answer can be tried again
+  without going back to the list.
+- Typing and YouTube search open as a sheet above the keyboard, which says whether the text has
+  reached the TV.
+- The TV list has one headline and one line of text, shows which TV is being checked, and lists
+  what to check when no TV is found.
+
 ### Fixed
 - A TV that is on but idle is still found. While no TV is listed, the app now checks the network
   again every 10 seconds instead of only once.

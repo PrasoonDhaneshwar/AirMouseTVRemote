@@ -51,6 +51,12 @@ private const val RESWEEP_INTERVAL_MS = 10_000L
 /** How long a TV gets to show its pairing code, or accept us, before the attempt is abandoned. */
 private const val PAIRING_RESPONSE_TIMEOUT_MS = 15_000L
 
+/** How long a turned-down code stays in its boxes, in red, before they empty for the next try. */
+private const val CODE_REJECTED_SHOWN_MS = 1000L
+
+/** How long the "Paired" tick shows before the remote opens: long enough for its animation to finish. */
+private const val PAIRED_SHOWN_MS = 900L
+
 /** How often listed TVs are re-checked while discovery is showing. */
 private const val LIVENESS_INTERVAL_MS = 5000L
 /** Consecutive failed checks before a TV is dropped from the list; one miss can be a dropped packet. */
@@ -211,8 +217,15 @@ class RemoteViewModel @Inject constructor(
             isReconnecting = false,
             awaitingCode = false,
             pairingCode = "",
+            codeRejected = false,
+            paired = false,
             error = error
         )
+    }
+
+    /** Hides the message currently shown; the list or remote underneath is unchanged. */
+    fun dismissError() {
+        _uiState.value = _uiState.value.copy(error = null)
     }
 
     fun startDiscovery() {
@@ -307,10 +320,6 @@ class RemoteViewModel @Inject constructor(
                 val sweep = launch { scanSubnet() }
                 delay(SCAN_WINDOW_MS)
                 sweep.join()
-
-                if (repository.discoveredTvs.value.isEmpty()) {
-                    _uiState.value = _uiState.value.copy(error = "No TVs found. Try again or check Wi-Fi.")
-                }
             } finally {
                 // Always stop the spinner, whether or not anything was found
                 _uiState.value = _uiState.value.copy(isRefreshing = false, isDiscovering = false)
@@ -356,25 +365,63 @@ class RemoteViewModel @Inject constructor(
                         val tv = (_uiState.value.mode as? RemoteMode.Pairing)?.tv
                         if (tv != null) {
                             lastTvStore.save(tv)
-                            _uiState.value = _uiState.value.copy(
-                                mode = RemoteMode.Connected(tv),
-                                powerOffIsFinal = wakeSupportStore.cannotWake(tv.name)
-                            )
+                            openRemote(tv)
                         }
                     }
                     ConnectionState.AwaitingCode -> {
                         _uiState.value = _uiState.value.copy(awaitingCode = true)
                     }
-                    is ConnectionState.Error -> {
-                        _uiState.value = _uiState.value.copy(error = state.message)
+                    is ConnectionState.Error -> when {
+                        state.wrongCode -> showCodeRejected()
+                        // Any other failure ends the pairing attempt, so the code boxes make way for "try again"
+                        _uiState.value.mode is RemoteMode.Pairing -> _uiState.value = _uiState.value.copy(
+                            awaitingCode = false, pairingCode = "", codeRejected = false, error = state.message
+                        )
+                        else -> _uiState.value = _uiState.value.copy(error = state.message)
                     }
                     ConnectionState.Disconnected -> {
                         (_uiState.value.mode as? RemoteMode.Connected)?.let { startReconnect(it.tv) }
                     }
                     else -> Unit
                 }
+            }
+        }
     }
+
+    /**
+     * Moves from the pairing screen to the remote for [tv]. After a typed code the pairing screen
+     * first confirms it for [PAIRED_SHOWN_MS]; a TV that already trusted us opens the remote at once.
+     */
+    private fun openRemote(tv: DiscoveredTv) {
+        val codeWasTyped = _uiState.value.awaitingCode
+        if (codeWasTyped) _uiState.value = _uiState.value.copy(paired = true, error = null)
+        viewModelScope.launch {
+            if (codeWasTyped) delay(PAIRED_SHOWN_MS)
+            if (_uiState.value.mode != RemoteMode.Pairing(tv)) return@launch
+            _uiState.value = _uiState.value.copy(
+                mode = RemoteMode.Connected(tv),
+                awaitingCode = false,
+                pairingCode = "",
+                paired = false,
+                powerOffIsFinal = wakeSupportStore.cannotWake(tv.name)
+            )
+            // The session may have dropped while the tick was showing, when no remote was there to notice
+            if (remoteSession.connectionState.value == ConnectionState.Disconnected) startReconnect(tv)
+        }
     }
+
+    /**
+     * Shows the typed code as wrong, then empties the boxes: codes are typed fast, so the user
+     * shouldn't have to delete six characters before trying again.
+     */
+    private fun showCodeRejected() {
+        _uiState.value = _uiState.value.copy(codeRejected = true, error = "That code didn't match. Try again.")
+        viewModelScope.launch {
+            delay(CODE_REJECTED_SHOWN_MS)
+            if (_uiState.value.codeRejected) {
+                _uiState.value = _uiState.value.copy(codeRejected = false, pairingCode = "")
+            }
+        }
     }
 
 
@@ -393,11 +440,10 @@ class RemoteViewModel @Inject constructor(
             val reachable = remoteSession.isReachable(tv.host)
             if (!reachable) {
                 repository.removeDiscovered(tv.host)
-                _uiState.value = _uiState.value.copy(
-                    isCheckingTv = false,
-                    error = "${tv.displayName} isn't responding at ${tv.host}, so it was removed from the list. " +
-                        "Turn it on and tap refresh."
-                )
+                val message = "${tv.displayName} didn't answer, so it was taken off the list. Turn it on, then scan again."
+                _uiState.value = _uiState.value.copy(isCheckingTv = false, error = message)
+                // A retry from the pairing screen: the TV is gone from the list, so show the list
+                if (_uiState.value.mode is RemoteMode.Pairing) returnToDiscovery(error = message)
                 return@launch
             }
 
@@ -405,7 +451,9 @@ class RemoteViewModel @Inject constructor(
                 isCheckingTv = false,
                 mode = RemoteMode.Pairing(tv),
                 awaitingCode = false,
-                pairingCode = ""
+                pairingCode = "",
+                codeRejected = false,
+                paired = false
             )
             watchPairingTv(tv)
             try {
@@ -436,12 +484,29 @@ class RemoteViewModel @Inject constructor(
         }
     }
 
-    /** Ends a connection attempt that can't continue: back to the list with [message] shown, so no spinner is left running. */
+    /**
+     * Ends a connection attempt that can't continue, so no spinner is left running. A TV that is gone
+     * ([removeTv]) leaves the list and the list is shown; otherwise the pairing screen stays, showing
+     * [message] and offering to try the same TV again.
+     */
     private fun failConnect(tv: DiscoveredTv, message: String?, removeTv: Boolean) {
         pairingWatchJob?.cancel()
         remoteSession.close()
-        if (removeTv) repository.removeDiscovered(tv.host)
-        returnToDiscovery(error = message)
+        if (removeTv) {
+            repository.removeDiscovered(tv.host)
+            returnToDiscovery(error = message)
+        } else {
+            _uiState.value = _uiState.value.copy(
+                awaitingCode = false, pairingCode = "", codeRejected = false,
+                error = message ?: "Couldn't connect to ${tv.displayName}."
+            )
+        }
+    }
+
+    /** Starts over with the TV the pairing screen is showing, after a failed attempt. */
+    fun retryPairing() {
+        val tv = (_uiState.value.mode as? RemoteMode.Pairing)?.tv ?: return
+        selectTv(tv)
     }
 
     /**
@@ -468,9 +533,18 @@ class RemoteViewModel @Inject constructor(
         }
     }
 
-    /** Keeps only what can be part of a pairing code (see [normalizePairingCode]) and clears any shown error. */
+    /**
+     * Keeps only what can be part of a pairing code (see [normalizePairingCode]) and clears any shown
+     * error. The code is sent as soon as it is complete, so there is no button to press.
+     */
     fun updatePairingCode(code: String) {
-        _uiState.value = _uiState.value.copy(pairingCode = normalizePairingCode(code), error = null)
+        val state = _uiState.value
+        // The boxes are showing a result (wrong, or paired); keys typed meanwhile would be lost or sent twice
+        if (state.codeRejected || state.paired) return
+        val normalized = normalizePairingCode(code)
+        if (normalized == state.pairingCode) return
+        _uiState.value = state.copy(pairingCode = normalized, error = null)
+        if (normalized.length == PAIRING_CODE_LENGTH) submitPairingCode()
     }
 
     /** Sends the typed code to the TV; ignored until all 6 digits are entered. */
@@ -486,6 +560,8 @@ class RemoteViewModel @Inject constructor(
 
     /** Abandons the connection attempt and returns to discovery. */
     fun cancelPairing() {
+        // Already paired and about to open the remote: there is nothing left to cancel
+        if (_uiState.value.paired) return
         reconnectJob?.cancel()
         pairingWatchJob?.cancel()
         remoteSession.close()

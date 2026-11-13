@@ -22,6 +22,8 @@ private val AirMouseColorScheme = darkColorScheme(
     onSurface = TextPrimary,
     surfaceVariant = SurfaceMid,
     onSurfaceVariant = TextSecondary,
+    // Bottom sheets take this one
+    surfaceContainerLow = SheetSurface,
     surfaceContainer = SurfaceMid,
     surfaceContainerHigh = SurfaceHigh,
     outline = Outline,
@@ -29,11 +31,12 @@ private val AirMouseColorScheme = darkColorScheme(
     onError = OnAmber,
 )
 
+/** Small: icon tiles. Medium: rows, cards and buttons. Extra large: sheets, dialogs and the touchpad. */
 private val AirMouseShapes = Shapes(
     extraSmall = RoundedCornerShape(4.dp),
-    small = RoundedCornerShape(8.dp),
-    medium = RoundedCornerShape(8.dp),
-    large = RoundedCornerShape(12.dp),
+    small = RoundedCornerShape(12.dp),
+    medium = RoundedCornerShape(16.dp),
+    large = RoundedCornerShape(20.dp),
     extraLarge = RoundedCornerShape(28.dp),
 )
 

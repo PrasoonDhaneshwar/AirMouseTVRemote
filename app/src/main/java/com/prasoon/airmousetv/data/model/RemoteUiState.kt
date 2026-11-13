@@ -24,6 +24,10 @@ data class RemoteUiState(
     val pairingCode: String = "",
     /** True once the TV is showing its code, so the screen swaps the spinner for the code field. */
     val awaitingCode: Boolean = false,
+    /** True for a moment after the TV turned the typed code down: the boxes show it, then empty themselves. */
+    val codeRejected: Boolean = false,
+    /** True for a moment after a code was accepted, while the pairing screen shows its tick before the remote opens. */
+    val paired: Boolean = false,
     val error: String? = null,
     /** True while the app is re-establishing a dropped session; the remote stays on screen, disabled. */
     val isReconnecting: Boolean = false,
