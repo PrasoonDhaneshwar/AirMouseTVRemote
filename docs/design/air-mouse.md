@@ -3,7 +3,7 @@
 | | |
 |---|---|
 | **Covers** | A pointer on the TV, moved by pointing the phone, like LG's Magic Remote |
-| **Status** | Proposal. Nothing is built yet. Decided: Bluetooth HID first, companion app only if needed (section 4.2) |
+| **Status** | Option B (Bluetooth HID) is built in the `:airmouse` module with its pad and setup screens, but **no pointer has moved on a TV yet**: pairing did not complete in the first spike session (section 7.9). The companion app (A) is not started |
 | **Related** | [Remote design](remote.md) (built) · Stitch "Deep Code" design (Air Mouse screens) |
 
 The remote today drives the TV the way a normal remote does: D-pad steps, OK, and keys. This
@@ -304,9 +304,9 @@ hid.connect(tvDevice)                                        // after the one-ti
 hid.sendReport(tvDevice, MOUSE_REPORT_ID, report)            // buttons, dx, dy, wheel
 ```
 
-- **Report descriptor:** a fixed byte table declaring two reports.
-  - Mouse: 3 buttons, relative X and Y (−127…127 each), and a wheel.
-  - Keyboard: modifier byte and up to 6 key codes.
+- **Report descriptor:** a fixed byte table declaring one report: a mouse with 3 buttons,
+  relative X and Y (−127…127 each), and a wheel. The keyboard report planned at first was left
+  out (section 13): Android hides its on-screen keyboard while a hardware keyboard is connected.
 - **Relative movement.** All pointer math (smoothing, dead zone, acceleration, clutch, recenter)
   stays on the phone, in `data/api/` with JVM tests, and only the resulting movement is sent.
   Larger movements are split across several reports.
@@ -385,6 +385,27 @@ the share can't be predicted from public data. Therefore:
 **Security:** Bluetooth pairing and its encryption are handled by the system, and only bonded
 devices can send input. No extra protocol or certificates are needed.
 
+### 7.9 Spike findings so far (November 2026)
+
+One session, with a POCO F1 (Android 12, an AOSP build) and a Hisense Android TV 9. Checklist
+item 1 is half done; items 2 to 7 are open.
+
+| Finding | What it means for the app |
+|---|---|
+| The POCO F1 has the HID device role, and `registerApp` succeeds | One Xiaomi-family phone confirmed, on a custom ROM. Says nothing about stock MIUI |
+| **Android takes the role away whenever anything covers the app**, including its own pairing dialog and the "make visible" prompt. The app is unregistered while they show | The role can't be held through pairing. The link asks for it again every 1.5 s until the app is back in front |
+| A TV that pairs while the phone is not registered files it as a generic device (shown with a game pad icon) and never opens the HID connection | After pairing, the phone has to open the connection itself. During setup it offers it to every paired device that isn't a computer or a phone |
+| When the phone opens the connection to a TV that has forgotten it, Android drops the stale pairing and starts a new one. The TV shows its own "Bluetooth pairing request" **without its accessory screen being open** | Pairing can start from the phone. This may remove step 1 of the setup, if the phone can find the TV's Bluetooth address (open question, section 12) |
+| The phone showed that pairing request only as a notification, not a dialog, and it timed out after 30 s | The setup says to look in the notifications |
+| On a second try the TV's "Add accessory" list did not show the phone, although the TV's log shows it received the phone's inquiry response | Not understood yet. The list may filter on device class, which would change with the role being held or not |
+| The remote protocol's link message most likely can't open "Add accessory": that screen is started by an internal action, not a link, and this TV rejects `intent:` links | Not tested on the TV yet. The setup screens carry a D-pad, Back and Home instead, so the user walks there with the app |
+
+Phones tested for the HID device role:
+
+| Phone | Android | Role available |
+|---|---|---|
+| POCO F1 (AOSP-based custom ROM) | 12 | Yes |
+
 ## 8. Fitting into the existing app
 
 ### 8.1 Mode detection
@@ -413,10 +434,16 @@ remote looks exactly as it does today.
 - **New `AirMouseSession` singleton** that owns the active `PointerSink`, alongside
   `RemoteSessionManager`. Neither depends on the other, so the stock remote is unaffected by air
   mouse failures.
-- **Pointer math in `data/api/`** (filters, gain curve, roll compensation): pure Kotlin, JVM
-  tests.
-- **A sensor source wrapper** in `data/repository/` that registers sensors only while the air
-  mouse screen is showing, and stops on pause.
+- **Its own Gradle module, `:airmouse`.** Everything except the screens lives there: pointer
+  math, the Bluetooth link, the sensor source and `AirMouseSession`. It has no Hilt and no UI, so
+  it builds and runs its tests without the app's annotation processing, and it can be left out of
+  a build, or gated, when the air mouse becomes a paid feature. The app provides the session
+  through `di/AirMouseModule`. The pad and setup screens stay in `app`, next to the theme and key
+  widgets they share with the remote.
+- **Pointer math in the module's `api` package** (filters, gain curve, roll compensation): pure
+  Kotlin, JVM tests.
+- **A sensor source wrapper** in its `repository` package that registers sensors only while the
+  air mouse is showing, and stops on pause.
 - `RemoteViewModel` gains air mouse state in `RemoteUiState`, following the one-state pattern.
 
 ### 8.3 Navigation
@@ -473,7 +500,14 @@ revisiting the no-Navigation decision, together with the UI overhaul.
 
 - Whether A is needed after all, judged against the criteria in section 4.2 once the spike and
   first users' diagnostics are in.
-- What the right button does: Back, or long press.
+- What the right button does: Back, or long press. The app sends a real right click and leaves
+  it to the TV; what this TV does with it is still to be seen.
+- Whether the phone should find and pair the TV itself (a Bluetooth scan, which needs the
+  `BLUETOOTH_SCAN` permission) instead of sending the user to the TV's "Add accessory" screen.
+  Section 7.9 shows the TV accepts a pairing started by the phone.
+- Whether a tap on the pad should click on phones with a gyroscope. It doesn't today, because
+  the thumb lifts all the time to re-aim; Click is a key of its own.
+- Not built yet: Recenter, the settings sheet (sensitivity, Smooth Air, calibration, unlink).
 - Whether the live sensor and X/Y readouts from the Stitch screen are for users, or only a debug
   view (for the UI overhaul).
 - How the dashboard's "signal" should be measured: the phone's Wi-Fi strength (A), or Bluetooth
@@ -488,3 +522,6 @@ revisiting the no-Navigation decision, together with the UI overhaul.
 | Oct 2026 | Keys, text, volume and app links stay on the stock protocol | Proven and works without the air mouse |
 | Nov 2026 | Build Bluetooth HID (B) first; build the companion app (A) only if the criteria in section 4.2 are met | B avoids a TV app and the accessibility policy risk; the shared work keeps A cheap to add later |
 | Nov 2026 | Pointer output goes through a `PointerSink` interface | Lets A be added beside B without changing the pointer model or UI, and allows JVM tests with a fake |
+| Nov 2026 | The phone is a Bluetooth mouse only, not a keyboard too | A keyboard in the descriptor makes Android TV treat the phone as a hardware keyboard and hide its on-screen keyboard. The cost: adding the keyboard later (7.5) means pairing again |
+| Nov 2026 | The air mouse lives in its own module, `:airmouse`; its screens stay in the app | Fast to build and test by itself, and separable for a paid feature. Moving the screens too would need a shared UI module first |
+| Nov 2026 | The setup screens carry remote keys | The setup must not need the TV's own remote |

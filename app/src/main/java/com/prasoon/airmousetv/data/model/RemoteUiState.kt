@@ -1,5 +1,7 @@
 package com.prasoon.airmousetv.data.model
 
+import com.prasoon.airmousetv.airmouse.model.AirMouseUiState
+
 /** Which top-level screen is showing. */
 sealed interface RemoteMode {
     /** Looking for TVs on the network. */
@@ -37,4 +39,6 @@ data class RemoteUiState(
     val foregroundApp: String? = null,
     /** True when the connected TV is known to leave the network once switched off, so the app can't turn it back on. */
     val powerOffIsFinal: Boolean = false,
+    /** The pointer for the connected TV; all defaults while no TV is connected. */
+    val airMouse: AirMouseUiState = AirMouseUiState(),
 )

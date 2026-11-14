@@ -21,4 +21,5 @@ dependencyResolutionManagement {
 
 rootProject.name = "AirMouse TV Remote"
 include(":app")
+include(":airmouse")
  

@@ -62,6 +62,20 @@ class MainActivity : ComponentActivity() {
     }
 
     /**
+     * The air mouse holds the phone's Bluetooth mouse role, and its sensors, only while the app is
+     * in front. Android takes the role away in the background in any case; this takes it back on return.
+     */
+    override fun onStart() {
+        super.onStart()
+        viewModel.setAirMouseForeground(true)
+    }
+
+    override fun onStop() {
+        viewModel.setAirMouseForeground(false)
+        super.onStop()
+    }
+
+    /**
      * While the remote is showing, the phone's volume buttons change the TV's volume: it is the
      * volume control already under the user's finger. On any other screen, and while the connection
      * is being re-established, they stay the phone's.

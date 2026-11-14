@@ -8,14 +8,20 @@ import com.prasoon.airmousetv.data.api.PAIRING_CODE_LENGTH
 import com.prasoon.airmousetv.data.api.STILL_TALKING_AFTER_POWER_MS
 import com.prasoon.airmousetv.data.api.lostAfterPowerOff
 import com.prasoon.airmousetv.data.api.mayBeSwitchingOff
+import com.prasoon.airmousetv.airmouse.api.nextSetupStep
 import com.prasoon.airmousetv.data.api.normalizePairingCode
 import com.prasoon.airmousetv.data.api.parseIpv4
+import com.prasoon.airmousetv.airmouse.model.AirMouseSetupStep
+import com.prasoon.airmousetv.airmouse.model.AirMouseUiState
 import com.prasoon.airmousetv.data.model.ConnectionState
 import com.prasoon.airmousetv.data.model.DiscoveredTv
 import com.prasoon.airmousetv.data.model.KeyAction
+import com.prasoon.airmousetv.airmouse.model.PointerButton
+import com.prasoon.airmousetv.airmouse.model.PointerLinkState
 import com.prasoon.airmousetv.data.model.RemoteMode
 import com.prasoon.airmousetv.data.model.RemoteUiState
 import com.prasoon.airmousetv.data.model.TvKey
+import com.prasoon.airmousetv.airmouse.repository.AirMouseSession
 import com.prasoon.airmousetv.data.repository.LastTvStore
 import com.prasoon.airmousetv.data.repository.RemoteRepository
 import com.prasoon.airmousetv.data.repository.RemoteSessionManager
@@ -83,7 +89,8 @@ class RemoteViewModel @Inject constructor(
     private val repository: RemoteRepository,
     private val remoteSession: RemoteSessionManager,
     private val lastTvStore: LastTvStore,
-    private val wakeSupportStore: WakeSupportStore
+    private val wakeSupportStore: WakeSupportStore,
+    private val airMouse: AirMouseSession
 ) : ViewModel() {
 
     private val _uiState = MutableStateFlow(RemoteUiState())
@@ -110,9 +117,19 @@ class RemoteViewModel @Inject constructor(
     /** Watches whether the TV stays on the network after a Power tap; see [watchStaysOnNetwork]. */
     private var powerWatchJob: Job? = null
 
+    /** True while the remote shows the air mouse pad. */
+    private var airPadShowing = false
+
+    /** True from the moment the user starts the air mouse setup until it is closed or finished. */
+    private var airSetupBegun = false
+
+    /** False while the app is in the background, where Android takes the Bluetooth mouse role away anyway. */
+    private var inForeground = false
+
     init {
         observeConnectionState()
         observeImeField()
+        observeAirMouse()
         lastTvStore.load()?.let { connectToLastTv(it) }
     }
 
@@ -219,8 +236,11 @@ class RemoteViewModel @Inject constructor(
             pairingCode = "",
             codeRejected = false,
             paired = false,
-            error = error
+            error = error,
+            airMouse = AirMouseUiState()
         )
+        airSetupBegun = false
+        airMouse.stop()
     }
 
     /** Hides the message currently shown; the list or remote underneath is unchanged. */
@@ -403,7 +423,12 @@ class RemoteViewModel @Inject constructor(
                 awaitingCode = false,
                 pairingCode = "",
                 paired = false,
-                powerOffIsFinal = wakeSupportStore.cannotWake(tv.name)
+                powerOffIsFinal = wakeSupportStore.cannotWake(tv.name),
+                airMouse = AirMouseUiState(
+                    available = airMouse.available,
+                    linked = airMouse.isLinked(tv.name),
+                    hasGyroscope = airMouse.hasGyroscope
+                )
             )
             // The session may have dropped while the tick was showing, when no remote was there to notice
             if (remoteSession.connectionState.value == ConnectionState.Disconnected) startReconnect(tv)
@@ -622,8 +647,140 @@ class RemoteViewModel @Inject constructor(
         }
     }
 
+    // ===== Air mouse =====
+
+    private fun observeAirMouse() {
+        airMouse.onNote = remoteSession::note
+        // The TV's Bluetooth pairing is gone: the pad makes way for the offer to set it up again
+        airMouse.onUnlinked = { updateAirMouse { it.copy(linked = false) } }
+        viewModelScope.launch {
+            airMouse.state.collect { link ->
+                val tv = (_uiState.value.mode as? RemoteMode.Connected)?.tv
+                updateAirMouse {
+                    it.copy(
+                        link = link,
+                        linked = tv != null && airMouse.isLinked(tv.name),
+                        setup = it.setup?.let { step -> if (airSetupBegun) nextSetupStep(step, link) else step }
+                    )
+                }
+            }
+        }
+    }
+
+    private fun updateAirMouse(change: (AirMouseUiState) -> AirMouseUiState) {
+        _uiState.value = _uiState.value.copy(airMouse = change(_uiState.value.airMouse))
+    }
+
+    /**
+     * Holds the Bluetooth mouse role exactly while something on screen needs it: the pad, or a
+     * setup that has been started. Without the Bluetooth permission nothing starts and the link
+     * stays idle, which the pad shows as "allow Bluetooth".
+     *
+     * A setup doesn't let go while the app is behind something else, because that something is
+     * Android's own pairing or "make visible" dialog. Android takes the role away under those
+     * anyway; staying started is what lets the link ask for it again the moment the dialog closes,
+     * and then offer the TV the pointer connection it didn't open by itself.
+     */
+    private fun syncAirMouse() {
+        val tv = (_uiState.value.mode as? RemoteMode.Connected)?.tv
+        if (tv != null && (airSetupBegun || (inForeground && airPadShowing))) {
+            airMouse.start(tv.name)
+        } else {
+            airMouse.stop()
+        }
+    }
+
+    /** Tells the air mouse whether the app is in front. In the background the pointer is let go. */
+    fun setAirMouseForeground(foreground: Boolean) {
+        inForeground = foreground
+        // Android may have taken the role away while the app was behind; coming back is the time to ask again
+        if (foreground && airMouse.state.value == PointerLinkState.BLOCKED) airMouse.stop()
+        syncAirMouse()
+    }
+
+    /** Tells the air mouse whether its pad is on screen; the pointer is connected only while it is. */
+    fun setAirMousePadShowing(showing: Boolean) {
+        airPadShowing = showing
+        syncAirMouse()
+    }
+
+    /** Tries the pointer again after the user has been asked for the Bluetooth permission. */
+    fun retryAirMouse() {
+        syncAirMouse()
+    }
+
+    /** Opens the one-time air mouse setup at its first screen. */
+    fun openAirMouseSetup() {
+        updateAirMouse { it.copy(setup = AirMouseSetupStep.INTRO) }
+    }
+
+    /**
+     * Starts the setup proper, once the user has allowed Bluetooth: takes the mouse role, which is
+     * also how the app finds out whether this phone has one. The steps then follow the link's state.
+     */
+    fun beginAirMouseSetup() {
+        if (_uiState.value.airMouse.setup == null) return
+        airSetupBegun = true
+        syncAirMouse()
+        updateAirMouse { it.copy(phoneName = airMouse.phoneName) }
+    }
+
+    /** The user says the TV is searching for accessories; the phone is being made visible to it. */
+    fun awaitTvPairing() {
+        if (_uiState.value.airMouse.setup == AirMouseSetupStep.ON_TV) {
+            updateAirMouse { it.copy(setup = AirMouseSetupStep.WAITING) }
+        }
+    }
+
+    /** One step back in the setup, or out of it from its first screen. */
+    fun backInAirMouseSetup() {
+        when (_uiState.value.airMouse.setup) {
+            AirMouseSetupStep.WAITING -> updateAirMouse { it.copy(setup = AirMouseSetupStep.ON_TV) }
+            // Finished: there is nothing to go back to, so Back leaves like the button does
+            AirMouseSetupStep.DONE -> finishAirMouseSetup()
+            else -> closeAirMouseSetup()
+        }
+    }
+
+    /** Leaves the setup unfinished. */
+    fun closeAirMouseSetup() {
+        airSetupBegun = false
+        updateAirMouse { it.copy(setup = null) }
+        syncAirMouse()
+    }
+
+    /**
+     * Leaves the finished setup. The pointer link is kept as it is: the remote switches to the air
+     * mouse pad next, and letting go here would only make the TV reconnect a moment later.
+     */
+    fun finishAirMouseSetup() {
+        airSetupBegun = false
+        updateAirMouse { it.copy(setup = null) }
+    }
+
+    /** Forgets the TV's Bluetooth pairing and opens the setup again, for a pointer that won't reconnect. */
+    fun redoAirMouseSetup() {
+        val tv = (_uiState.value.mode as? RemoteMode.Connected)?.tv ?: return
+        airMouse.stop()
+        airMouse.unlink(tv.name)
+        updateAirMouse { it.copy(linked = false, setup = AirMouseSetupStep.INTRO) }
+    }
+
+    /** The thumb touched the air mouse pad or left it; the pointer follows the phone only while it is down. */
+    fun airThumb(down: Boolean) = airMouse.thumb(down)
+
+    /** The thumb slid over the air mouse pad by [dxDp], [dyDp] in [dtSeconds]. */
+    fun airSlide(dxDp: Float, dyDp: Float, dtSeconds: Float) = airMouse.slide(dxDp, dyDp, dtSeconds)
+
+    /** Presses or releases a button of the TV's pointer. */
+    fun airButton(button: PointerButton, down: Boolean) = airMouse.button(button, down)
+
+    /** Scrolls at the TV's pointer by [notches] of the wheel, up being positive. */
+    fun airScroll(notches: Float) = airMouse.scroll(notches)
+
     override fun onCleared() {
         super.onCleared()
+        airMouse.stop()
         tvCollectorJob?.cancel()
         repository.stopDiscovery()
         repository.releaseResources()
