@@ -26,8 +26,13 @@ import com.prasoon.airmousetv.airmouse.api.HidMouse
 import com.prasoon.airmousetv.airmouse.api.HidRegistration
 import com.prasoon.airmousetv.airmouse.api.PointerSink
 import com.prasoon.airmousetv.airmouse.api.hidLinkState
+import com.prasoon.airmousetv.airmouse.api.isTvClass
+import com.prasoon.airmousetv.airmouse.api.tvCandidates
+import com.prasoon.airmousetv.airmouse.api.tvToPairUnasked
+import com.prasoon.airmousetv.airmouse.model.NearbyDevice
 import com.prasoon.airmousetv.airmouse.model.PointerButton
 import com.prasoon.airmousetv.airmouse.model.PointerLinkState
+import com.prasoon.airmousetv.airmouse.model.TvSearch
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -58,6 +63,13 @@ private const val CANDIDATE_TIMEOUT_MS = 6000L
 
 /** How often the mouse role is asked for again after Android took it away, until the app is back in front and gets it. */
 private const val REREGISTER_DELAY_MS = 1500L
+
+/**
+ * How many Bluetooth scans in a row the setup runs while looking for the TV. One scan takes about
+ * 12 seconds, so this is two minutes: long enough to walk through the TV's settings, and not a
+ * radio left scanning for as long as the screen stays open.
+ */
+private const val MAX_SEARCH_ROUNDS = 10
 
 /**
  * The pointer over Bluetooth: the phone presents itself to the TV as a mouse (the HID device
@@ -95,12 +107,24 @@ class BluetoothHidSink(
     /** Receives events worth keeping for a bug report. */
     var onNote: (String) -> Unit = {}
 
+    private val _search = MutableStateFlow(TvSearch())
+
+    /** During setup: what the phone's own search for the TV has found. */
+    val search: StateFlow<TvSearch> = _search.asStateFlow()
+
     private val mouse = HidMouse()
     private var link: HidLink? = null
 
     /** True if the app may use Bluetooth. Before Android 12 the permission comes with the install. */
     fun hasPermission(): Boolean = Build.VERSION.SDK_INT < Build.VERSION_CODES.S ||
         ContextCompat.checkSelfPermission(context, Manifest.permission.BLUETOOTH_CONNECT) == PackageManager.PERMISSION_GRANTED
+
+    /**
+     * True if the phone may look for the TV itself. Scanning without the location permission exists
+     * from Android 12; before that the TV has to find the phone instead.
+     */
+    fun canSearch(): Boolean = Build.VERSION.SDK_INT >= Build.VERSION_CODES.S &&
+        ContextCompat.checkSelfPermission(context, Manifest.permission.BLUETOOTH_SCAN) == PackageManager.PERMISSION_GRANTED
 
     /** The name the TV lists this phone under while pairing, or null if it can't be read. */
     val phoneName: String?
@@ -109,9 +133,10 @@ class BluetoothHidSink(
 
     /**
      * Takes the mouse role and connects to the TV at [linkedAddress], or waits for a TV to pair if
-     * that is null. Returns false, having done nothing, if the Bluetooth permission is missing.
+     * that is null, looking for it under [tvNames], the names it has on the network. Returns false,
+     * having done nothing, if the Bluetooth permission is missing.
      */
-    fun start(linkedAddress: String?): Boolean {
+    fun start(linkedAddress: String?, tvNames: List<String>): Boolean {
         if (!supported || adapter == null || Build.VERSION.SDK_INT < Build.VERSION_CODES.P) {
             _state.value = PointerLinkState.UNSUPPORTED
             return true
@@ -119,11 +144,12 @@ class BluetoothHidSink(
         if (!hasPermission()) return false
         if (link != null) return true
         link = HidLink(
-            context, adapter, mouse, linkedAddress,
+            context, adapter, mouse, linkedAddress, tvNames, canSearch(),
             onState = { _state.value = it },
             onLinked = { onLinked(it) },
             onUnlinked = { onUnlinked() },
-            onNote = { onNote(it) }
+            onNote = { onNote(it) },
+            onSearch = { _search.value = it }
         ).also { it.open() }
         return true
     }
@@ -133,6 +159,12 @@ class BluetoothHidSink(
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) link?.close()
         link = null
         _state.value = PointerLinkState.IDLE
+        _search.value = TvSearch()
+    }
+
+    /** Starts pairing with the device at [address], one the search found and the user picked. */
+    fun pairWith(address: String) {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) link?.pairWith(address)
     }
 
     override suspend fun move(dx: Float, dy: Float) = send(mouse.move(dx, dy))
@@ -160,10 +192,13 @@ private class HidLink(
     private val adapter: BluetoothAdapter,
     private val mouse: HidMouse,
     linkedAddress: String?,
+    private val tvNames: List<String>,
+    private val canSearch: Boolean,
     private val onState: (PointerLinkState) -> Unit,
     private val onLinked: (String) -> Unit,
     private val onUnlinked: () -> Unit,
     private val onNote: (String) -> Unit,
+    private val onSearch: (TvSearch) -> Unit,
 ) {
     private val main = Handler(Looper.getMainLooper())
 
@@ -199,6 +234,14 @@ private class HidLink(
     /** During setup: paired devices still to be offered the mouse connection, one at a time. */
     private val candidates = ArrayDeque<BluetoothDevice>()
     private val nextCandidate = Runnable { offerToNextCandidate() }
+
+    /** During setup: devices the scan has seen that aren't computers or phones, by address. */
+    private val found = LinkedHashMap<String, NearbyDevice>()
+    private var searching = false
+    private var searchRounds = 0
+
+    /** During setup: the device a pairing has been started with and not yet finished or failed. */
+    private var pairing: BluetoothDevice? = null
 
     private val profileListener = object : BluetoothProfile.ServiceListener {
         override fun onServiceConnected(profile: Int, proxy: BluetoothProfile) {
@@ -250,7 +293,10 @@ private class HidLink(
                     } else if (target == null) {
                         main.removeCallbacks(nextCandidate)
                         candidates.clear()
+                        pairing = null
+                        stopSearch()
                         target = device
+                        publishSearch()
                         note("TV paired for the pointer")
                         onLinked(device.address)
                     }
@@ -286,10 +332,11 @@ private class HidLink(
                         main.removeCallbacks(nextCandidate)
                         main.removeCallbacks(register)
                         main.removeCallbacks(profileTimeout)
+                        searching = false
                     }
                 }
                 BluetoothDevice.ACTION_BOND_STATE_CHANGED -> {
-                    val device = bondedDevice(intent) ?: return
+                    val device = deviceIn(intent) ?: return
                     when (intent.getIntExtra(BluetoothDevice.EXTRA_BOND_STATE, -1)) {
                         // The device that has just paired is the likeliest TV, so it goes to the front
                         BluetoothDevice.BOND_BONDED -> if (target == null && registration == HidRegistration.REGISTERED) {
@@ -298,15 +345,38 @@ private class HidLink(
                             main.removeCallbacks(nextCandidate)
                             main.postDelayed(nextCandidate, CONNECT_AFTER_BOND_MS)
                         }
-                        BluetoothDevice.BOND_NONE -> if (device == target) unlink("TV pairing removed")
+                        BluetoothDevice.BOND_NONE -> when (device) {
+                            target -> unlink("TV pairing removed")
+                            // Refused or timed out on one side: back to looking, so it can be tried again
+                            pairing -> {
+                                note("Pairing did not complete")
+                                pairing = null
+                                searchRounds = 0
+                                startSearch()
+                                publishSearch()
+                            }
+                        }
                     }
+                }
+                BluetoothDevice.ACTION_FOUND -> {
+                    val device = deviceIn(intent) ?: return
+                    if (!mayBeTv(device)) return
+                    val name = intent.getStringExtra(BluetoothDevice.EXTRA_NAME) ?: device.name
+                    val looksLikeTv = device.bluetoothClass?.let { isTvClass(it.deviceClass) } == true
+                    found[device.address] = NearbyDevice(device.address, name, looksLikeTv)
+                    // The one device carrying the TV's name needs no question asked
+                    if (searching) tvToPairUnasked(found.values.toList(), tvNames)?.let { pairWith(it.address) }
+                    publishSearch()
+                }
+                BluetoothAdapter.ACTION_DISCOVERY_FINISHED -> if (searching) {
+                    if (++searchRounds < MAX_SEARCH_ROUNDS) adapter.startDiscovery() else searching = false
                 }
             }
             publish()
         }
     }
 
-    private fun bondedDevice(intent: Intent): BluetoothDevice? =
+    private fun deviceIn(intent: Intent): BluetoothDevice? =
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
             intent.getParcelableExtra(BluetoothDevice.EXTRA_DEVICE, BluetoothDevice::class.java)
         } else {
@@ -318,9 +388,11 @@ private class HidLink(
         val filter = IntentFilter().apply {
             addAction(BluetoothAdapter.ACTION_STATE_CHANGED)
             addAction(BluetoothDevice.ACTION_BOND_STATE_CHANGED)
+            addAction(BluetoothDevice.ACTION_FOUND)
+            addAction(BluetoothAdapter.ACTION_DISCOVERY_FINISHED)
         }
         // Exported, because these come from the Bluetooth app, which is not the system process and
-        // would not reach a receiver that isn't. Both are protected: no other app can send them
+        // would not reach a receiver that isn't. All four are protected: no other app can send them
         ContextCompat.registerReceiver(context, receiver, filter, ContextCompat.RECEIVER_EXPORTED)
         if (adapter.isEnabled) requestProfile()
         publish()
@@ -369,6 +441,8 @@ private class HidLink(
     private fun offerToPairedDevices() {
         candidates.clear()
         adapter.bondedDevices.orEmpty().filterTo(candidates, ::mayBeTv)
+        // A device the user has just paired with on purpose is tried before older pairings
+        pairing?.let { candidates.remove(it); candidates.addFirst(it) }
         offerToNextCandidate()
     }
 
@@ -384,10 +458,60 @@ private class HidLink(
     private fun offerToNextCandidate() {
         val device = hid ?: return
         if (closed || target != null || registration != HidRegistration.REGISTERED) return
-        val candidate = candidates.removeFirstOrNull() ?: return
+        val candidate = candidates.removeFirstOrNull() ?: run {
+            // Nobody the phone is paired with took the connection: look for the TV instead
+            pairing = null
+            startSearch()
+            publishSearch()
+            return
+        }
         device.connect(candidate)
         main.removeCallbacks(nextCandidate)
         main.postDelayed(nextCandidate, CANDIDATE_TIMEOUT_MS)
+    }
+
+    /**
+     * Looks for the TV over Bluetooth, where the phone is allowed to. A TV can be found while its
+     * "add accessory" screen is open, and some can at any time. Finding it lets the phone start
+     * the pairing, which the TV then only has to confirm: nothing has to be picked from a list on
+     * the TV, and the TV doesn't need to recognise the phone as an accessory.
+     */
+    private fun startSearch() {
+        if (!canSearch || closed || target != null || pairing != null || !adapter.isEnabled) return
+        searching = true
+        if (!adapter.isDiscovering) adapter.startDiscovery()
+    }
+
+    private fun stopSearch() {
+        if (!searching) return
+        searching = false
+        adapter.cancelDiscovery()
+    }
+
+    /**
+     * Pairs with the device at [address] and, once paired, offers it the mouse connection. The
+     * scan is stopped first: a radio that is scanning connects slowly or not at all.
+     */
+    fun pairWith(address: String) {
+        if (closed || target != null || pairing != null) return
+        val device = runCatching { adapter.getRemoteDevice(address) }.getOrNull() ?: return
+        stopSearch()
+        pairing = device
+        note("Pairing with a device found nearby")
+        if (device.bondState == BluetoothDevice.BOND_BONDED) {
+            offerToPairedDevices()
+        } else if (!device.createBond()) {
+            note("Pairing could not be started")
+            pairing = null
+            startSearch()
+        }
+        publishSearch()
+    }
+
+    private fun publishSearch() {
+        if (closed) return
+        val pairingName = pairing?.let { found[it.address]?.name ?: it.name ?: it.address }
+        onSearch(TvSearch(possible = canSearch, candidates = tvCandidates(found.values.toList(), tvNames), pairingWith = pairingName))
     }
 
     /** Opens the mouse connection to the known TV. Does nothing during setup, when no TV is known yet. */
@@ -433,6 +557,7 @@ private class HidLink(
         main.removeCallbacks(reconnect)
         main.removeCallbacks(nextCandidate)
         main.removeCallbacks(register)
+        stopSearch()
         mouse.reset()?.let(::send)
         runCatching { context.unregisterReceiver(receiver) }
         hid?.let { device ->

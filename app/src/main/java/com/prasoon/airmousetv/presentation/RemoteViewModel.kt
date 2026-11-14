@@ -665,7 +665,13 @@ class RemoteViewModel @Inject constructor(
                 }
             }
         }
+        viewModelScope.launch {
+            airMouse.search.collect { search -> updateAirMouse { it.copy(search = search) } }
+        }
     }
+
+    /** Starts pairing with the device at [address], one the setup's search found and the user picked as their TV. */
+    fun pairAirMouseWith(address: String) = airMouse.pairWith(address)
 
     private fun updateAirMouse(change: (AirMouseUiState) -> AirMouseUiState) {
         _uiState.value = _uiState.value.copy(airMouse = change(_uiState.value.airMouse))
@@ -684,7 +690,8 @@ class RemoteViewModel @Inject constructor(
     private fun syncAirMouse() {
         val tv = (_uiState.value.mode as? RemoteMode.Connected)?.tv
         if (tv != null && (airSetupBegun || (inForeground && airPadShowing))) {
-            airMouse.start(tv.name)
+            // The TV goes by the same name over Bluetooth on most models, which is how the search knows it
+            airMouse.start(tv.name, listOfNotNull(tv.friendlyName, tv.displayName, tv.name).distinct())
         } else {
             airMouse.stop()
         }

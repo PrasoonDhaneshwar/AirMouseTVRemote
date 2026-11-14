@@ -7,6 +7,7 @@ import com.prasoon.airmousetv.airmouse.api.PointerPipeline
 import com.prasoon.airmousetv.airmouse.api.PointerSink
 import com.prasoon.airmousetv.airmouse.model.PointerButton
 import com.prasoon.airmousetv.airmouse.model.PointerLinkState
+import com.prasoon.airmousetv.airmouse.model.TvSearch
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -61,6 +62,12 @@ class AirMouseSession private constructor(
     /** The name the TV lists this phone under while pairing, or null if it can't be read. */
     val phoneName: String? get() = hidSink.phoneName
 
+    /** During setup: what the phone's own search for the TV over Bluetooth has found. */
+    val search: StateFlow<TvSearch> get() = hidSink.search
+
+    /** Starts pairing with the device at [address], one the search found and the user picked. Call from the main thread. */
+    fun pairWith(address: String) = hidSink.pairWith(address)
+
     /** Called when the TV's Bluetooth pairing turns out to be gone and the air mouse needs setting up again. */
     var onUnlinked: () -> Unit = {}
 
@@ -86,9 +93,9 @@ class AirMouseSession private constructor(
      * waits for it to pair if not. Returns false, having done nothing, if the Bluetooth permission
      * is missing. Call from the main thread.
      */
-    fun start(tvName: String): Boolean {
+    fun start(tvName: String, tvNames: List<String>): Boolean {
         this.tvName = tvName
-        if (!hidSink.start(links.addressFor(tvName))) return false
+        if (!hidSink.start(links.addressFor(tvName), tvNames)) return false
         sensors.start { sample -> pipeline.onMotion(sample)?.let(::send) }
         return true
     }

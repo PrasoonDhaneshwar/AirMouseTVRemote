@@ -49,6 +49,21 @@ data class AirMouseUiState(
     val setup: AirMouseSetupStep? = null,
     /** The name the TV lists this phone under while pairing, or null if it isn't known. */
     val phoneName: String? = null,
+    /** During setup: what the phone's search for the TV over Bluetooth has turned up. */
+    val search: TvSearch = TvSearch(),
+)
+
+/** A Bluetooth device seen in a scan. [looksLikeTv] is true if it announces itself as a TV or TV stick. */
+data class NearbyDevice(val address: String, val name: String?, val looksLikeTv: Boolean)
+
+/** Where the phone's own search for the TV stands, while the air mouse is being set up. */
+data class TvSearch(
+    /** False where the phone can't look for the TV itself (before Android 12, or scanning not allowed), and the TV has to find the phone. */
+    val possible: Boolean = false,
+    /** Devices found that could be the TV, likeliest first; the user picks when the app can't tell. */
+    val candidates: List<NearbyDevice> = emptyList(),
+    /** The name of the device being paired with right now, or null when none is. */
+    val pairingWith: String? = null,
 )
 
 /** The steps of the one-time Bluetooth setup, in order. */

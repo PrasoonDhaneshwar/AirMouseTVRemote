@@ -400,6 +400,17 @@ item 1 is half done; items 2 to 7 are open.
 | On a second try the TV's "Add accessory" list did not show the phone, although the TV's log shows it received the phone's inquiry response | Not understood yet. The list may filter on device class, which would change with the role being held or not |
 | The remote protocol's link message most likely can't open "Add accessory": that screen is started by an internal action, not a link, and this TV rejects `intent:` links | Not tested on the TV yet. The setup screens carry a D-pad, Back and Home instead, so the user walks there with the app |
 
+**Built on these findings, not yet run on a TV:** on Android 12 and later the setup's first step
+is the phone looking for the TV over Bluetooth (`BLUETOOTH_SCAN`, declared never to be used for
+location). A device found under one of the TV's network names is paired with at once; other
+devices that announce themselves as TVs are offered for the user to pick; computers, phones and
+headphones are never offered. The TV then only has to confirm its pairing request, which the
+setup's own OK key can do. If the TV isn't found, the screen says to open "Add accessory", which
+makes a TV visible. The older way round (the TV finds the phone) stays as a fallback, and is the
+only way before Android 12, where scanning would need the location permission. Still to be
+learned on real TVs: whether they can be found without their accessory screen open, and how often
+the Bluetooth name differs from the network name.
+
 Phones tested for the HID device role:
 
 | Phone | Android | Role available |
@@ -502,9 +513,8 @@ revisiting the no-Navigation decision, together with the UI overhaul.
   first users' diagnostics are in.
 - What the right button does: Back, or long press. The app sends a real right click and leaves
   it to the TV; what this TV does with it is still to be seen.
-- Whether the phone should find and pair the TV itself (a Bluetooth scan, which needs the
-  `BLUETOOTH_SCAN` permission) instead of sending the user to the TV's "Add accessory" screen.
-  Section 7.9 shows the TV accepts a pairing started by the phone.
+- Whether phone-started pairing (section 7.9) works on real TVs well enough to drop the "TV
+  finds the phone" fallback and the `BLUETOOTH_ADVERTISE` permission with it.
 - Whether a tap on the pad should click on phones with a gyroscope. It doesn't today, because
   the thumb lifts all the time to re-aim; Click is a key of its own.
 - Not built yet: Recenter, the settings sheet (sensitivity, Smooth Air, calibration, unlink).

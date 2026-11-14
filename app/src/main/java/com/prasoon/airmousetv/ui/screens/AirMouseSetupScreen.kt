@@ -67,7 +67,9 @@ import androidx.compose.ui.unit.sp
 import androidx.core.content.ContextCompat
 import com.prasoon.airmousetv.airmouse.model.AirMouseSetupStep
 import com.prasoon.airmousetv.airmouse.model.AirMouseUiState
+import com.prasoon.airmousetv.airmouse.model.NearbyDevice
 import com.prasoon.airmousetv.airmouse.model.PointerLinkState
+import com.prasoon.airmousetv.airmouse.model.TvSearch
 import com.prasoon.airmousetv.data.model.KeyAction
 import com.prasoon.airmousetv.data.model.TvKey
 import com.prasoon.airmousetv.presentation.RemoteViewModel
@@ -82,7 +84,9 @@ private const val VISIBLE_FOR_S = 120
 
 /** The permissions the air mouse needs on Android 12 and later, where Bluetooth is asked for at runtime. */
 @RequiresApi(Build.VERSION_CODES.S)
-private val BLUETOOTH_PERMISSIONS = arrayOf(Manifest.permission.BLUETOOTH_CONNECT, Manifest.permission.BLUETOOTH_ADVERTISE)
+private val BLUETOOTH_PERMISSIONS = arrayOf(
+    Manifest.permission.BLUETOOTH_CONNECT, Manifest.permission.BLUETOOTH_SCAN, Manifest.permission.BLUETOOTH_ADVERTISE
+)
 
 /** True if the app may use Bluetooth. Before Android 12 the permission comes with the install. */
 internal fun Context.hasBluetoothPermission(): Boolean = Build.VERSION.SDK_INT < Build.VERSION_CODES.S ||
@@ -159,12 +163,14 @@ internal fun AirMouseSetupScreen(
         step = step,
         link = airMouse.link,
         phoneName = airMouse.phoneName,
+        search = airMouse.search,
         tvName = tvName,
         needsPermission = !LocalContext.current.hasBluetoothPermission(),
         onKey = onKey,
         onBegin = begin,
         onTurnOnBluetooth = turnOnBluetooth,
         onTvSearching = askToBeVisible,
+        onPair = viewModel::pairAirMouseWith,
         onBack = viewModel::backInAirMouseSetup,
         onClose = viewModel::closeAirMouseSetup,
         onDone = viewModel::finishAirMouseSetup,
@@ -177,12 +183,14 @@ private fun AirMouseSetupContent(
     step: AirMouseSetupStep,
     link: PointerLinkState,
     phoneName: String?,
+    search: TvSearch,
     tvName: String,
     needsPermission: Boolean,
     onKey: (TvKey, KeyAction) -> Unit,
     onBegin: () -> Unit,
     onTurnOnBluetooth: () -> Unit,
     onTvSearching: () -> Unit,
+    onPair: (address: String) -> Unit,
     onBack: () -> Unit,
     onClose: () -> Unit,
     onDone: () -> Unit,
@@ -198,7 +206,15 @@ private fun AirMouseSetupContent(
     ) {
         when (step) {
             AirMouseSetupStep.INTRO -> Intro(link, needsPermission, onBegin, onTurnOnBluetooth, onClose)
-            AirMouseSetupStep.ON_TV -> OnTv(onKey, onTvSearching, onBack)
+            AirMouseSetupStep.ON_TV -> {
+                val pairingWith = search.pairingWith
+                when {
+                    pairingWith != null -> Pairing(pairingWith, onKey, onBack)
+                    search.possible -> FindTv(tvName, search.candidates, onKey, onPair, onTvSearching, onBack)
+                    // The phone can't look for the TV (before Android 12), so the TV looks for the phone
+                    else -> OnTv(onKey, onTvSearching, onBack)
+                }
+            }
             AirMouseSetupStep.WAITING -> Waiting(phoneName, onKey, onTvSearching, onBack)
             AirMouseSetupStep.DONE -> Done(tvName, onDone)
             AirMouseSetupStep.UNSUPPORTED -> Unsupported(blocked = link == PointerLinkState.BLOCKED, onClose, onCopyDiagnostics)
@@ -375,6 +391,82 @@ private fun SetupRemote(onKey: (TvKey, KeyAction) -> Unit, modifier: Modifier = 
 }
 
 @Composable
+private fun ColumnScope.FindTv(
+    tvName: String,
+    candidates: List<NearbyDevice>,
+    onKey: (TvKey, KeyAction) -> Unit,
+    onPair: (address: String) -> Unit,
+    onLetTvFindPhone: () -> Unit,
+    onBack: () -> Unit
+) {
+    TopRow(Icons.AutoMirrored.Filled.ArrowBack, "Back", onBack, stepsDone = 1)
+    Body {
+        Spacer(Modifier.height(28.dp))
+        StepCaption("STEP 1 · FIND THE TV")
+        Headline("Looking for $tvName over Bluetooth", Modifier.padding(top = 6.dp))
+        if (candidates.isEmpty()) {
+            Explanation(
+                "Not found yet? Open Add accessory on the TV with the keys below. That makes the TV visible, and pairing starts by itself.",
+                Modifier.padding(top = 10.dp)
+            )
+            NumberedCard(listOf("Settings", "Remotes & Accessories", "Add accessory"), Modifier.padding(top = 16.dp))
+        } else {
+            // Found, but under a name the app can't match to the connected TV, so the user says which it is
+            Explanation("Is one of these your TV?", Modifier.padding(top = 10.dp))
+            Column(Modifier.padding(top = 12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                candidates.forEach { device ->
+                    SecondaryAction("Pair with ${device.name ?: device.address}", { onPair(device.address) })
+                }
+            }
+        }
+        SetupRemote(onKey, Modifier.padding(top = 20.dp))
+    }
+    Row(
+        Modifier.fillMaxWidth().padding(bottom = 6.dp),
+        horizontalArrangement = Arrangement.spacedBy(10.dp, Alignment.CenterHorizontally),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        CircularProgressIndicator(Modifier.size(18.dp), strokeWidth = 2.5.dp)
+        Text("Searching…", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+    }
+    // The older way round, for a TV the phone can't find: the TV looks for the phone
+    TextButton(onClick = onLetTvFindPhone, modifier = Modifier.fillMaxWidth().height(48.dp)) {
+        Text("Let the TV find this phone instead", style = MaterialTheme.typography.titleSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+    }
+}
+
+/**
+ * Shown while a pairing the phone started is waiting to be accepted. Both sides ask: the TV with a
+ * screen of its own, which the keys here can answer, and the phone with a dialog or, when Android
+ * decides so, only a notification.
+ */
+@Composable
+private fun ColumnScope.Pairing(deviceName: String, onKey: (TvKey, KeyAction) -> Unit, onBack: () -> Unit) {
+    TopRow(Icons.AutoMirrored.Filled.ArrowBack, "Back", onBack, stepsDone = 2)
+    Body {
+        Spacer(Modifier.height(28.dp))
+        StepCaption("STEP 2 · ACCEPT ON BOTH")
+        Headline("Pairing with $deviceName", Modifier.padding(top = 6.dp))
+        NumberedCard(
+            listOf(
+                "On the TV, choose Pair. The OK key below does it.",
+                "On this phone, accept the pairing request. If none appears, pull down the notifications and tap it."
+            ),
+            Modifier.padding(top = 16.dp)
+        )
+        SetupRemote(onKey, Modifier.padding(top = 20.dp))
+    }
+    Row(
+        Modifier.fillMaxWidth().height(56.dp),
+        horizontalArrangement = Arrangement.spacedBy(10.dp, Alignment.CenterHorizontally),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        CircularProgressIndicator(Modifier.size(18.dp), strokeWidth = 2.5.dp)
+        Text("Waiting for both to accept…", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+    }
+}
+
+@Composable
 private fun ColumnScope.OnTv(onKey: (TvKey, KeyAction) -> Unit, onTvSearching: () -> Unit, onBack: () -> Unit) {
     TopRow(Icons.AutoMirrored.Filled.ArrowBack, "Back", onBack, stepsDone = 1)
     Body {
@@ -462,9 +554,9 @@ private fun ColumnScope.Unsupported(blocked: Boolean, onClose: () -> Unit, onCop
 }
 
 @Composable
-private fun SetupPreview(step: AirMouseSetupStep, link: PointerLinkState = PointerLinkState.IDLE) {
+private fun SetupPreview(step: AirMouseSetupStep, link: PointerLinkState = PointerLinkState.IDLE, search: TvSearch = TvSearch()) {
     AirMouseTVRemoteTheme {
-        AirMouseSetupContent(step, link, "Pixel 8", "Living Room TV", needsPermission = true, { _, _ -> }, {}, {}, {}, {}, {}, {}, {})
+        AirMouseSetupContent(step, link, "Pixel 8", search, "Living Room TV", needsPermission = true, { _, _ -> }, {}, {}, {}, {}, {}, {}, {}, {})
     }
 }
 
@@ -495,3 +587,20 @@ private fun SetupUnsupportedPreview() = SetupPreview(AirMouseSetupStep.UNSUPPORT
 @Preview(showBackground = true, widthDp = 320, heightDp = 568, name = "Setup: small screen")
 @Composable
 private fun SetupSmallScreenPreview() = SetupPreview(AirMouseSetupStep.ON_TV, PointerLinkState.NEEDS_PAIRING)
+
+@Preview(showBackground = true, widthDp = 390, heightDp = 844, name = "Setup: 1 looking for the TV")
+@Composable
+private fun SetupFindTvPreview() = SetupPreview(AirMouseSetupStep.ON_TV, PointerLinkState.NEEDS_PAIRING, TvSearch(possible = true))
+
+@Preview(showBackground = true, widthDp = 390, heightDp = 844, name = "Setup: 1 which one is the TV")
+@Composable
+private fun SetupPickTvPreview() = SetupPreview(
+    AirMouseSetupStep.ON_TV, PointerLinkState.NEEDS_PAIRING,
+    TvSearch(possible = true, candidates = listOf(NearbyDevice("00:11:22:33:44:55", "Bedroom TV", looksLikeTv = true)))
+)
+
+@Preview(showBackground = true, widthDp = 390, heightDp = 844, name = "Setup: 2 accept the pairing")
+@Composable
+private fun SetupPairingPreview() = SetupPreview(
+    AirMouseSetupStep.ON_TV, PointerLinkState.NEEDS_PAIRING, TvSearch(possible = true, pairingWith = "Living Room TV")
+)
