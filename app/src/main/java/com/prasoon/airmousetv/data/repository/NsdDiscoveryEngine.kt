@@ -48,8 +48,12 @@ class NsdDiscoveryEngine @Inject constructor(
 
     private val discoveryListeners = mutableListOf<NsdManager.DiscoveryListener>()
 
-    /** API 34+: one callback per service name, so a service announced again doesn't stack callbacks. */
-    private val serviceInfoCallbacks = ConcurrentHashMap<String, NsdManager.ServiceInfoCallback>()
+    /**
+     * API 34+: one callback per service name, so a service announced again doesn't stack callbacks.
+     * Typed [Any] because NsdManager.ServiceInfoCallback doesn't exist below API 34: a cast to it on an older
+     * phone throws NoClassDefFoundError, which crashed the app on Android 12 whenever a TV was lost.
+     */
+    private val serviceInfoCallbacks = ConcurrentHashMap<String, Any>()
 
     /** Below API 34: services waiting to be resolved. NsdManager resolves one at a time, so they queue. */
     private val pendingResolves = ArrayDeque<NsdServiceInfo>()
@@ -240,7 +244,7 @@ class NsdDiscoveryEngine @Inject constructor(
         val callback = serviceInfoCallbacks.remove(key) ?: return
         try {
             if (Build.VERSION.SDK_INT >= 34) {
-                nsdManager.unregisterServiceInfoCallback(callback)
+                nsdManager.unregisterServiceInfoCallback(callback as NsdManager.ServiceInfoCallback)
             }
         } catch (e: Exception) {
             Log.w(TAG_NSD, "ServiceInfoCallback cleanup ignored", e)
