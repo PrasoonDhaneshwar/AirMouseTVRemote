@@ -8,9 +8,13 @@ import com.prasoon.airmousetv.data.api.PAIRING_CODE_LENGTH
 import com.prasoon.airmousetv.data.api.STILL_TALKING_AFTER_POWER_MS
 import com.prasoon.airmousetv.data.api.lostAfterPowerOff
 import com.prasoon.airmousetv.data.api.mayBeSwitchingOff
+import com.prasoon.airmousetv.airmouse.api.VolumeAction
 import com.prasoon.airmousetv.airmouse.api.nextSetupStep
+import com.prasoon.airmousetv.airmouse.api.tvLinkKeys
+import com.prasoon.airmousetv.airmouse.api.volumeAction
 import com.prasoon.airmousetv.data.api.normalizePairingCode
 import com.prasoon.airmousetv.data.api.parseIpv4
+import com.prasoon.airmousetv.airmouse.model.AirMouseSettings
 import com.prasoon.airmousetv.airmouse.model.AirMouseSetupStep
 import com.prasoon.airmousetv.airmouse.model.AirMouseUiState
 import com.prasoon.airmousetv.data.model.ConnectionState
@@ -91,6 +95,9 @@ private const val RECONNECT_BASE_DELAY_MS = 1000L
  * has pinged by then.
  */
 private const val STAYS_ON_NETWORK_CHECK_MS = STILL_TALKING_AFTER_POWER_MS + 10_000L
+
+/** The names this TV's air mouse link is kept under; the remote can know one TV by different ones (see [tvLinkKeys]). */
+private val DiscoveredTv.airMouseKeys: List<String> get() = tvLinkKeys(name, friendlyName, host)
 
 /**
  * Drives the whole UI flow: discovery -> connect/pair -> remote.
@@ -248,6 +255,7 @@ class RemoteViewModel @Inject constructor(
             pairingCode = "",
             codeRejected = false,
             paired = false,
+            pairedOffer = false,
             error = error,
             airMouse = AirMouseUiState()
         )
@@ -476,24 +484,54 @@ class RemoteViewModel @Inject constructor(
     private fun openRemote(tv: DiscoveredTv) {
         val codeWasTyped = _uiState.value.awaitingCode
         if (codeWasTyped) _uiState.value = _uiState.value.copy(paired = true, error = null)
+        // A TV paired for the first time is the moment to say the air mouse exists: once, and only on a
+        // phone known to be able to do it. The screen then waits for an answer instead of moving on
+        val offerAirMouse = codeWasTyped && airMouse.hasMouseRole == true &&
+            !airMouse.offeredAfterPairing && !airMouse.isLinked(tv.airMouseKeys)
+        if (offerAirMouse) {
+            airMouse.offeredAfterPairing = true
+            _uiState.value = _uiState.value.copy(pairedOffer = true)
+            return
+        }
         viewModelScope.launch {
             if (codeWasTyped) delay(PAIRED_SHOWN_MS)
-            if (_uiState.value.mode != RemoteMode.Pairing(tv)) return@launch
-            _uiState.value = _uiState.value.copy(
-                mode = RemoteMode.Connected(tv),
-                awaitingCode = false,
-                pairingCode = "",
-                paired = false,
-                powerOffIsFinal = wakeSupportStore.cannotWake(tv.name),
-                airMouse = AirMouseUiState(
-                    available = airMouse.available,
-                    linked = airMouse.isLinked(tv.name),
-                    hasGyroscope = airMouse.hasGyroscope
-                )
-            )
-            // The session may have dropped while the tick was showing, when no remote was there to notice
-            if (remoteSession.connectionState.value == ConnectionState.Disconnected) startReconnect(tv)
+            showRemote(tv)
         }
+    }
+
+    /** Leaves the pairing screen for the remote of [tv], if that pairing screen is still the one showing. */
+    private fun showRemote(tv: DiscoveredTv) {
+        if (_uiState.value.mode != RemoteMode.Pairing(tv)) return
+        _uiState.value = _uiState.value.copy(
+            mode = RemoteMode.Connected(tv),
+            awaitingCode = false,
+            pairingCode = "",
+            paired = false,
+            pairedOffer = false,
+            powerOffIsFinal = wakeSupportStore.cannotWake(tv.name),
+            airMouse = AirMouseUiState(
+                available = airMouse.available,
+                linked = airMouse.isLinked(tv.airMouseKeys),
+                hasGyroscope = airMouse.hasGyroscope,
+                roleKnown = airMouse.hasMouseRole == true,
+                settings = airMouse.settings
+            )
+        )
+        // Finding out asks the user nothing; on a phone where it is known already this returns at once
+        airMouse.findOutMouseRole { has -> updateAirMouse { it.copy(roleKnown = has) } }
+        // The session may have dropped while the tick was showing, when no remote was there to notice
+        if (remoteSession.connectionState.value == ConnectionState.Disconnected) startReconnect(tv)
+    }
+
+    /**
+     * Answers the air mouse offer on the Paired screen: opens the remote, and with [setUp] goes
+     * straight on into the air mouse setup.
+     */
+    fun answerPairedOffer(setUp: Boolean) {
+        val tv = (_uiState.value.mode as? RemoteMode.Pairing)?.tv ?: return
+        if (!_uiState.value.pairedOffer) return
+        showRemote(tv)
+        if (setUp) openAirMouseSetup()
     }
 
     /**
@@ -539,7 +577,8 @@ class RemoteViewModel @Inject constructor(
                 awaitingCode = false,
                 pairingCode = "",
                 codeRejected = false,
-                paired = false
+                paired = false,
+                pairedOffer = false
             )
             watchPairingTv(tv)
             try {
@@ -646,6 +685,8 @@ class RemoteViewModel @Inject constructor(
 
     /** Abandons the connection attempt and returns to discovery. */
     fun cancelPairing() {
+        // Back on the Paired screen while it offers the air mouse means "not now", not a way to stay there
+        if (_uiState.value.pairedOffer) return answerPairedOffer(setUp = false)
         // Already paired and about to open the remote: there is nothing left to cancel
         if (_uiState.value.paired) return
         reconnectJob?.cancel()
@@ -712,6 +753,8 @@ class RemoteViewModel @Inject constructor(
 
     private fun observeAirMouse() {
         airMouse.onNote = remoteSession::note
+        // Asked once, quietly, so that by the time a TV is paired the app knows whether to mention the air mouse
+        airMouse.findOutMouseRole { }
         // The TV's Bluetooth pairing is gone: the pad makes way for the offer to set it up again
         airMouse.onUnlinked = { updateAirMouse { it.copy(linked = false) } }
         viewModelScope.launch {
@@ -720,7 +763,7 @@ class RemoteViewModel @Inject constructor(
                 updateAirMouse {
                     it.copy(
                         link = link,
-                        linked = tv != null && airMouse.isLinked(tv.name),
+                        linked = tv != null && airMouse.isLinked(tv.airMouseKeys),
                         setup = it.setup?.let { step -> if (airSetupBegun) nextSetupStep(step, link) else step }
                     )
                 }
@@ -752,7 +795,7 @@ class RemoteViewModel @Inject constructor(
         val tv = (_uiState.value.mode as? RemoteMode.Connected)?.tv
         if (tv != null && (airSetupBegun || (inForeground && airPadShowing))) {
             // The TV goes by the same name over Bluetooth on most models, which is how the search knows it
-            airMouse.start(tv.name, listOfNotNull(tv.friendlyName, tv.displayName, tv.name).distinct())
+            airMouse.start(tv.airMouseKeys, listOfNotNull(tv.friendlyName, tv.displayName, tv.name).distinct())
         } else {
             airMouse.stop()
         }
@@ -830,14 +873,92 @@ class RemoteViewModel @Inject constructor(
     fun redoAirMouseSetup() {
         val tv = (_uiState.value.mode as? RemoteMode.Connected)?.tv ?: return
         airMouse.stop()
-        airMouse.unlink(tv.name)
+        airMouse.unlink(tv.airMouseKeys)
         updateAirMouse { it.copy(linked = false, setup = AirMouseSetupStep.INTRO) }
     }
 
-    /** The thumb touched the air mouse pad or left it; the pointer follows the phone only while it is down. */
-    fun airThumb(down: Boolean) = airMouse.thumb(down)
+    /** Forgets the TV's Bluetooth pairing from the settings sheet; the air mouse pad makes way for the offer to set it up. */
+    fun unlinkAirMouse() {
+        val tv = (_uiState.value.mode as? RemoteMode.Connected)?.tv ?: return
+        airMouse.stop()
+        airMouse.unlink(tv.airMouseKeys)
+        updateAirMouse { it.copy(linked = false) }
+    }
 
-    /** The thumb slid over the air mouse pad by [dxDp], [dyDp] in [dtSeconds]. */
+    /** Changes how the air mouse feels and what the volume buttons do; takes effect at once and is remembered. */
+    fun updateAirMouseSettings(settings: AirMouseSettings) {
+        airMouse.settings = settings
+        updateAirMouse { it.copy(settings = settings) }
+    }
+
+    /**
+     * Measures the gyroscope's resting drift while the phone lies flat, so the pointer stops
+     * creeping by itself. The outcome shows in [AirMouseUiState.calibrated].
+     */
+    fun calibrateAirMouse() {
+        if (_uiState.value.airMouse.calibrating) return
+        updateAirMouse { it.copy(calibrating = true, calibrated = null) }
+        viewModelScope.launch {
+            val taken = airMouse.calibrate()
+            updateAirMouse { it.copy(calibrating = false, calibrated = taken) }
+        }
+    }
+
+    /** Forgets how the last calibration ended, when the settings sheet that showed it closes. */
+    fun clearCalibrationResult() {
+        updateAirMouse { it.copy(calibrated = null) }
+    }
+
+    /**
+     * A finger came down on the air mouse pad (true) or left it. While it is down the pointer holds
+     * still, so the phone can be re-aimed and a click lands where the user was pointing.
+     */
+    fun airPress(down: Boolean) = airMouse.press(down)
+
+    /** Brings the pointer back to about the middle of the TV's screen. */
+    fun airRecenter() = airMouse.recenter()
+
+    /** What the volume button being held right now was taken for, or null if none is held for the pointer. */
+    private var heldVolumeAction: VolumeAction? = null
+
+    /**
+     * Takes a press of one of the phone's volume buttons ([volumeUp] for the upper one) for the air
+     * mouse, if it is the pointer's to take right now. A click goes down at once and stays down for
+     * as long as the button is, so holding it drags. Returns false to leave the button to the TV's
+     * volume.
+     */
+    fun airVolumeKeyDown(volumeUp: Boolean): Boolean {
+        val air = _uiState.value.airMouse
+        val pointing = airPadShowing && air.link == PointerLinkState.READY && air.hasGyroscope
+        val action = volumeAction(volumeUp, air.settings, pointing)
+        if (action == VolumeAction.VOLUME) return false
+        heldVolumeAction = action
+        if (action == VolumeAction.CLICK) {
+            // Pushing a side button jolts the phone like a tap does, so the pointer holds still around it
+            airMouse.press(true)
+            airMouse.button(PointerButton.PRIMARY, true)
+        }
+        return true
+    }
+
+    /**
+     * The volume button taken by [airVolumeKeyDown] came back up. Back is sent now, like a key tap
+     * on screen, unless the press was [cancelled] by the window losing focus, when nobody meant it.
+     */
+    fun airVolumeKeyUp(cancelled: Boolean = false) {
+        when (heldVolumeAction) {
+            VolumeAction.CLICK -> {
+                airMouse.button(PointerButton.PRIMARY, false)
+                airMouse.press(false)
+            }
+            // Over Wi-Fi, like the Back key on screen: what a right click does is up to each TV app
+            VolumeAction.BACK -> if (!cancelled) sendKey(TvKey.BACK)
+            else -> Unit
+        }
+        heldVolumeAction = null
+    }
+
+    /** The finger slid over the air mouse pad by [dxDp], [dyDp] in [dtSeconds], with the pad used as a mouse pad. */
     fun airSlide(dxDp: Float, dyDp: Float, dtSeconds: Float) = airMouse.slide(dxDp, dyDp, dtSeconds)
 
     /** Presses or releases a button of the TV's pointer. */

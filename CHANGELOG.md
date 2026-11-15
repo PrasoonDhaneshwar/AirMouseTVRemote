@@ -5,12 +5,21 @@ All notable changes to Air Mouse TV Remote. Versions match the git tags and GitH
 ## [Unreleased]
 
 ### Added
-- Air mouse: point the phone at the TV and a pointer follows, with click, right click and scroll.
-  The phone acts as a Bluetooth mouse, so nothing is installed on the TV. It is set up once from
-  the "⋮" menu and then appears as a third pad next to the D-pad and the touchpad. The pointer
-  moves only while the thumb rests on the pad; sliding the thumb fine-tunes it. Phones without a
-  gyroscope point by sliding alone. Needs Android 9 or later and a phone whose maker left the
-  Bluetooth mouse role enabled.
+- Air mouse: point the phone at the TV and a pointer follows. The phone acts as a Bluetooth mouse,
+  so nothing is installed on the TV. Tap the pad to click, hold a finger on it to freeze the
+  pointer while re-aiming, and scroll with two fingers or the strip at the edge. Pointing pauses
+  when the phone is put down. While pointing, Vol + clicks and Vol − is Back.
+- An "Air pointing" switch on the pad turns it into a laptop-style mouse pad instead. Phones
+  without a gyroscope only have the mouse pad.
+- Recenter brings a pointer lost at an edge back to about the middle of the screen.
+- Air mouse settings: sensitivity, Smooth Air, a calibration for a pointer that drifts by itself,
+  what the volume buttons do, and Unlink.
+- The air mouse appears in the mode switch, with a PRO mark, on phones that can be a Bluetooth
+  mouse. Picking it before setup offers the setup in place of the pad, and the Paired screen offers
+  it once after a first pairing. Setup can be done with the app's own keys, without the TV's remote.
+- When a set-up TV is out of reach, the pad shows it reconnecting, and only offers to set it up
+  again after 30 seconds.
+- Needs Android 9 or later and a phone whose maker left the Bluetooth mouse role enabled.
 
 ## [1.4] - 2026-11-13
 

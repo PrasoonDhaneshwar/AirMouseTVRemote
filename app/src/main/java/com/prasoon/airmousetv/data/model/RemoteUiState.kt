@@ -34,6 +34,8 @@ data class RemoteUiState(
     val codeRejected: Boolean = false,
     /** True for a moment after a code was accepted, while the pairing screen shows its tick before the remote opens. */
     val paired: Boolean = false,
+    /** True while the Paired screen offers the air mouse and waits for an answer instead of opening the remote by itself. */
+    val pairedOffer: Boolean = false,
     val error: String? = null,
     /** True while the app is re-establishing a dropped session; the remote stays on screen, disabled. */
     val isReconnecting: Boolean = false,

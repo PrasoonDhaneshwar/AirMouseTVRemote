@@ -49,6 +49,13 @@ data class AirMouseUiState(
     val setup: AirMouseSetupStep? = null,
     /** The name the TV lists this phone under while pairing, or null if it isn't known. */
     val phoneName: String? = null,
+    /** True once this phone is known to have the Bluetooth mouse role, which is when the air mouse may be advertised to the user. */
+    val roleKnown: Boolean = false,
+    val settings: AirMouseSettings = AirMouseSettings(),
+    /** True while the gyroscope is being calibrated and the phone has to lie still. */
+    val calibrating: Boolean = false,
+    /** How the last calibration ended: true if it was taken, false if the phone moved, null if none was run since the sheet opened. */
+    val calibrated: Boolean? = null,
     /** During setup: what the phone's search for the TV over Bluetooth has turned up. */
     val search: TvSearch = TvSearch(),
 )
@@ -83,3 +90,27 @@ enum class AirMouseSetupStep {
     /** This phone can't be a Bluetooth mouse. */
     UNSUPPORTED,
 }
+
+/** What the phone's volume buttons do while air pointing is on. */
+enum class VolumeButtons {
+    /** Volume up clicks at the pointer, volume down is Back. */
+    CLICK_AND_BACK,
+
+    /** The other way round, for whichever button sits under the user's finger. */
+    SWAPPED,
+
+    /** The buttons change the TV's volume, as they do on the rest of the remote. */
+    TV_VOLUME,
+}
+
+/**
+ * How the user has set the air mouse up to feel. [sensitivity] and [smoothAir] are slider positions
+ * from 0 to 1, with 0.5 in the middle being the default.
+ */
+data class AirMouseSettings(
+    val sensitivity: Float = 0.5f,
+    val smoothAir: Float = 0.5f,
+    val volumeButtons: VolumeButtons = VolumeButtons.CLICK_AND_BACK,
+    /** True if moving the phone moves the pointer; false if the pad is used as a mouse pad. */
+    val airPointing: Boolean = true,
+)

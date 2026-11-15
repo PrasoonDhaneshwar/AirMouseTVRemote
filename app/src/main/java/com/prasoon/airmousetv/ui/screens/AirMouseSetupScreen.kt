@@ -309,7 +309,8 @@ private fun ColumnScope.Intro(
 ) {
     TopRow(Icons.Default.Close, "Close", onClose, stepsDone = null)
     Body {
-        Headline("Point your phone\nat the TV", Modifier.padding(top = 24.dp))
+        PointAtTvDrawing(Modifier.padding(top = 12.dp).fillMaxWidth().height(150.dp))
+        Headline("Point your phone\nat the TV", Modifier.padding(top = 20.dp))
         Explanation("A pointer on the TV follows your hand, like a laser pointer.", Modifier.padding(top = 10.dp))
         Column(Modifier.padding(top = 26.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) {
             IntroPoint(Icons.Default.Bluetooth, "Uses Bluetooth. Nothing to install on the TV.")

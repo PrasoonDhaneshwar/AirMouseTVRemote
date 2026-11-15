@@ -162,6 +162,42 @@ class BluetoothHidSink(
         _search.value = TvSearch()
     }
 
+    /**
+     * Finds out, without taking the mouse role or asking the user for anything, whether this phone
+     * has it, and calls [onKnown] on the main thread. Android only runs the profile's service on
+     * phones whose maker left it in, so being handed the profile at all is the answer. Does nothing
+     * while Bluetooth is off: the services of every profile are stopped then, and "no answer" would
+     * be mistaken for "not there".
+     */
+    fun probeRole(onKnown: (Boolean) -> Unit) {
+        val bluetooth = adapter
+        if (!supported || bluetooth == null) return onKnown(false)
+        val main = Handler(Looper.getMainLooper())
+        var answered = false
+        val answer = { has: Boolean ->
+            if (!answered) {
+                answered = true
+                onKnown(has)
+            }
+        }
+        val listener = object : BluetoothProfile.ServiceListener {
+            override fun onServiceConnected(profile: Int, proxy: BluetoothProfile) {
+                bluetooth.closeProfileProxy(profile, proxy)
+                answer(true)
+            }
+
+            override fun onServiceDisconnected(profile: Int) = Unit
+        }
+        try {
+            if (!bluetooth.isEnabled) return
+            if (!bluetooth.getProfileProxy(context, listener, BluetoothProfile.HID_DEVICE)) return answer(false)
+            main.postDelayed({ answer(false) }, PROFILE_TIMEOUT_MS)
+        } catch (e: SecurityException) {
+            // Some phones want the Bluetooth permission even for this; the setup finds out instead
+            Log.w(TAG, "Mouse role probe not allowed", e)
+        }
+    }
+
     /** Starts pairing with the device at [address], one the search found and the user picked. */
     fun pairWith(address: String) {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) link?.pairWith(address)
