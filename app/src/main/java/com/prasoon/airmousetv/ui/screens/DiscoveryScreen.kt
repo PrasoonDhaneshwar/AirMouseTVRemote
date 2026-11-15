@@ -161,6 +161,8 @@ private fun DiscoveryContent(
             checking = checking,
             found = tvs.size,
             refreshing = uiState.isRefreshing,
+            tvStarting = uiState.savedTvStarting,
+            tvOffNetwork = uiState.savedTvOffNetwork,
             // With nothing found, scanning again is the screen's main button instead
             onRefresh = onRefresh.takeUnless { nothingFound }
         )
@@ -208,7 +210,10 @@ private fun DiscoveryContent(
 
 /** One headline saying what is happening, one line saying what to do, and the scan button. */
 @Composable
-private fun Header(scanning: Boolean, checking: Boolean, found: Int, refreshing: Boolean, onRefresh: (() -> Unit)?) {
+private fun Header(
+    scanning: Boolean, checking: Boolean, found: Int, refreshing: Boolean,
+    tvStarting: Boolean, tvOffNetwork: Boolean, onRefresh: (() -> Unit)?
+) {
     val busy = scanning || checking
     Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
         ScanIndicator(
@@ -234,11 +239,15 @@ private fun Header(scanning: Boolean, checking: Boolean, found: Int, refreshing:
             Text(
                 text = when {
                     checking -> "Making sure it's awake."
+                    found == 0 && tvStarting -> "Your TV is on the network but still starting up. It will appear here by itself."
+                    found == 0 && tvOffNetwork ->
+                        "Your TV isn't answering on this Wi-Fi. If it just restarted, check it joined the same network as your phone."
                     scanning && found > 0 -> "Tap your TV to connect."
                     scanning -> "They appear here as they're found."
                     found == 1 -> "1 TV on this Wi-Fi."
                     found > 1 -> "$found TVs on this Wi-Fi."
-                    else -> "Check these, then scan again."
+                    // The app keeps sweeping while the list is empty, so a TV that finishes starting appears by itself
+                    else -> "Still watching. A TV that just switched on can take up to a minute to appear."
                 },
                 style = MaterialTheme.typography.bodyMedium.copy(fontSize = 15.sp),
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -306,6 +315,12 @@ private fun NothingFound(modifier: Modifier = Modifier) {
             }
             Icon(Icons.Default.Tv, contentDescription = null, tint = hint, modifier = Modifier.size(56.dp))
         }
+        Text(
+            "If it still doesn't show up, check:",
+            style = MaterialTheme.typography.bodyMedium.copy(fontSize = 15.sp),
+            color = hint,
+            modifier = Modifier.padding(bottom = 12.dp)
+        )
         listOf(
             "The TV is switched on",
             "The phone and TV are on the same Wi-Fi",
@@ -530,6 +545,27 @@ private fun DiscoveryCheckingPreview() = DiscoveryPreview(RemoteUiState(discover
 @Preview(showBackground = true, widthDp = 390, heightDp = 844, name = "Nothing found")
 @Composable
 private fun DiscoveryEmptyPreview() = DiscoveryPreview(RemoteUiState())
+
+@Preview(showBackground = true, widthDp = 390, heightDp = 844, name = "Saved TV starting, scanning")
+@Composable
+private fun DiscoveryTvStartingScanningPreview() = DiscoveryPreview(RemoteUiState(isDiscovering = true, savedTvStarting = true))
+
+@Preview(showBackground = true, widthDp = 390, heightDp = 844, name = "Saved TV starting")
+@Composable
+private fun DiscoveryTvStartingPreview() = DiscoveryPreview(RemoteUiState(savedTvStarting = true))
+
+@Preview(showBackground = true, widthDp = 390, heightDp = 844, name = "Saved TV off the network")
+@Composable
+private fun DiscoveryTvOffNetworkPreview() = DiscoveryPreview(RemoteUiState(savedTvOffNetwork = true))
+
+@Preview(showBackground = true, widthDp = 390, heightDp = 844, name = "Saved TV off the network, scanning")
+@Composable
+private fun DiscoveryTvOffNetworkScanningPreview() = DiscoveryPreview(RemoteUiState(isDiscovering = true, savedTvOffNetwork = true))
+
+// The longest subtitle on the narrowest phone with large text, to check it wraps instead of pushing the checklist off
+@Preview(showBackground = true, widthDp = 360, heightDp = 640, fontScale = 1.3f, name = "Saved TV off the network, small screen")
+@Composable
+private fun DiscoveryTvOffNetworkSmallPreview() = DiscoveryPreview(RemoteUiState(savedTvOffNetwork = true))
 
 @Preview(showBackground = true, widthDp = 390, heightDp = 844, name = "TV didn't answer")
 @Composable

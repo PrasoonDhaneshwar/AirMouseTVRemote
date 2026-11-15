@@ -22,6 +22,10 @@ data class RemoteUiState(
     val isRefreshing: Boolean = false,
     /** True while the selected TV is being checked for reachability, before the pairing screen opens. */
     val isCheckingTv: Boolean = false,
+    /** True while the saved TV answers on the network but its remote service isn't up yet (a TV still starting). */
+    val savedTvStarting: Boolean = false,
+    /** True once the saved TV has not answered at all for a couple of minutes: it may be on another network or band. */
+    val savedTvOffNetwork: Boolean = false,
     /** Code typed by the user: up to 6 hex digits. */
     val pairingCode: String = "",
     /** True once the TV is showing its code, so the screen swaps the spinner for the code field. */

@@ -22,6 +22,7 @@ import com.prasoon.airmousetv.data.model.RemoteMode
 import com.prasoon.airmousetv.data.model.RemoteUiState
 import com.prasoon.airmousetv.data.model.TvKey
 import com.prasoon.airmousetv.airmouse.repository.AirMouseSession
+import com.prasoon.airmousetv.data.repository.HostProbe
 import com.prasoon.airmousetv.data.repository.LastTvStore
 import com.prasoon.airmousetv.data.repository.RemoteRepository
 import com.prasoon.airmousetv.data.repository.RemoteSessionManager
@@ -67,6 +68,17 @@ private const val PAIRED_SHOWN_MS = 900L
 private const val LIVENESS_INTERVAL_MS = 5000L
 /** Consecutive failed checks before a TV is dropped from the list; one miss can be a dropped packet. */
 private const val LIVENESS_MAX_MISSES = 2
+/**
+ * How long a newly listed TV is exempt from being dropped. A Hisense TV was seen advertising itself
+ * about 10 s before its remote port accepted connections, and was dropped 11 s after it appeared.
+ */
+private const val LIVENESS_GRACE_MS = 30_000L
+
+/**
+ * How long the saved TV must stay silent before the list says it isn't on this network. A restart
+ * took the Hisense about a minute to rejoin Wi-Fi, so two minutes avoids crying wolf during a normal boot.
+ */
+private const val OFF_NETWORK_AFTER_MS = 120_000L
 
 /** How many times a dropped session is retried before giving up and returning to discovery. */
 private const val MAX_RECONNECT_ATTEMPTS = 4
@@ -256,15 +268,22 @@ class RemoteViewModel @Inject constructor(
         _uiState.value = _uiState.value.copy(isDiscovering = true, error = null)
         scanTimeoutJob?.cancel()
         scanTimeoutJob = viewModelScope.launch {
+            // Sweep at once, alongside multicast. On a busy 2.4/5 GHz router multicast is slow and lossy
+            // (it is sent at the lowest Wi-Fi rate), so waiting for it first only delayed the TV by seconds.
+            // The sweep takes ~2 s and a TV found by both is listed once (matched by address).
+            val firstSweep = launch { scanSubnet() }
+            launch { probeSavedTv() }
             delay(SCAN_WINDOW_MS)
-            // Multicast discovery found nothing: the network may drop it, so sweep the network instead
-            if (repository.discoveredTvs.value.isEmpty()) scanSubnet()
+            firstSweep.join()
             _uiState.value = _uiState.value.copy(isDiscovering = false)
             // Keep sweeping, quietly, for as long as nothing is listed and the list is showing
             // (stopDiscovery cancels this). A refresh runs its own sweep, so skip while one is going
             while (true) {
                 delay(RESWEEP_INTERVAL_MS)
-                if (repository.discoveredTvs.value.isEmpty() && !_uiState.value.isRefreshing) scanSubnet()
+                if (repository.discoveredTvs.value.isEmpty() && !_uiState.value.isRefreshing) {
+                    scanSubnet(patient = false)
+                    probeSavedTv()
+                }
             }
         }
 
@@ -272,7 +291,11 @@ class RemoteViewModel @Inject constructor(
         tvCollectorJob?.cancel()
         tvCollectorJob = viewModelScope.launch {
             repository.discoveredTvs.collect { tvs ->
-                _uiState.value = _uiState.value.copy(discoveredTvs = tvs)
+                _uiState.value = _uiState.value.copy(
+                    discoveredTvs = tvs,
+                    savedTvStarting = _uiState.value.savedTvStarting && tvs.isEmpty(),
+                    savedTvOffNetwork = _uiState.value.savedTvOffNetwork && tvs.isEmpty()
+                )
                 refreshSavedTvAddress(tvs)
             }
         }
@@ -289,10 +312,14 @@ class RemoteViewModel @Inject constructor(
         livenessJob?.cancel()
         livenessJob = viewModelScope.launch {
             val misses = mutableMapOf<String, Int>()
+            val firstSeen = mutableMapOf<String, Long>()
             while (true) {
                 delay(LIVENESS_INTERVAL_MS)
                 val tvs = repository.discoveredTvs.value
+                val now = SystemClock.elapsedRealtime()
                 misses.keys.retainAll(tvs.map { it.host }.toSet())
+                firstSeen.keys.retainAll(tvs.map { it.host }.toSet())
+                tvs.forEach { firstSeen.getOrPut(it.host) { now } }
                 val results = coroutineScope {
                     tvs.map { tv -> async { tv to remoteSession.isReachable(tv.host) } }.awaitAll()
                 }
@@ -301,6 +328,9 @@ class RemoteViewModel @Inject constructor(
                         misses.remove(tv.host)
                         continue
                     }
+                    // A TV announces itself before its remote port accepts connections, so a TV just listed,
+                    // or one being connected to, is not judged yet
+                    if (_uiState.value.isCheckingTv || now - (firstSeen[tv.host] ?: now) < LIVENESS_GRACE_MS) continue
                     val count = (misses[tv.host] ?: 0) + 1
                     if (count >= LIVENESS_MAX_MISSES) {
                         Log.i(TAG, "${tv.displayName} stopped answering, removing from list")
@@ -347,10 +377,38 @@ class RemoteViewModel @Inject constructor(
         }
     }
 
-    /** Looks for TVs by probing the network directly; a failure only means that nothing more is found. */
-    private suspend fun scanSubnet() {
+    /** When the saved TV first stopped answering in a row of checks, on the [SystemClock.elapsedRealtime] clock; 0 if it answers. */
+    private var savedTvUnreachableSince = 0L
+
+    /** Lists the last-used TV as soon as its saved address answers, without waiting for any discovery. */
+    private suspend fun probeSavedTv() {
+        val saved = lastTvStore.load() ?: return
         try {
-            repository.scanSubnet()
+            val probe = remoteSession.probeHost(saved.host)
+            if (probe == HostProbe.OPEN) repository.addDiscovered(saved)
+            // On the network but not serving yet: say so, rather than leaving the screen looking dead
+            val now = SystemClock.elapsedRealtime()
+            if (probe == HostProbe.UNREACHABLE) {
+                if (savedTvUnreachableSince == 0L) savedTvUnreachableSince = now
+            } else {
+                savedTvUnreachableSince = 0L
+            }
+            _uiState.value = _uiState.value.copy(
+                savedTvStarting = probe == HostProbe.REFUSED,
+                // Silent for a while: not just booting, so it may have joined another network (or band)
+                savedTvOffNetwork = savedTvUnreachableSince != 0L && now - savedTvUnreachableSince >= OFF_NETWORK_AFTER_MS
+            )
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            Log.w(TAG, "Saved TV probe failed", e)
+        }
+    }
+
+    /** Looks for TVs by probing the network directly; a failure only means that nothing more is found. */
+    private suspend fun scanSubnet(patient: Boolean = true) {
+        try {
+            repository.scanSubnet(patient)
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
@@ -372,8 +430,11 @@ class RemoteViewModel @Inject constructor(
         livenessJob?.cancel()
         repository.stopDiscovery()
         _uiState.value = _uiState.value.copy(
-            isDiscovering = false
+            isDiscovering = false,
+            savedTvStarting = false,
+            savedTvOffNetwork = false
         )
+        savedTvUnreachableSince = 0L
     }
 
     /** Translates [ConnectionState] changes from the session into UI state. */
