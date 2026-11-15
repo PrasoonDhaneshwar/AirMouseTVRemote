@@ -5,6 +5,7 @@ import android.util.Log
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.prasoon.airmousetv.data.api.PAIRING_CODE_LENGTH
+import com.prasoon.airmousetv.data.api.ScrollKeys
 import com.prasoon.airmousetv.data.api.STILL_TALKING_AFTER_POWER_MS
 import com.prasoon.airmousetv.data.api.lostAfterPowerOff
 import com.prasoon.airmousetv.data.api.mayBeSwitchingOff
@@ -22,6 +23,7 @@ import com.prasoon.airmousetv.data.model.DiscoveredTv
 import com.prasoon.airmousetv.data.model.KeyAction
 import com.prasoon.airmousetv.airmouse.model.PointerButton
 import com.prasoon.airmousetv.airmouse.model.PointerLinkState
+import com.prasoon.airmousetv.airmouse.model.ScrollWith
 import com.prasoon.airmousetv.data.model.RemoteMode
 import com.prasoon.airmousetv.data.model.RemoteUiState
 import com.prasoon.airmousetv.data.model.TvKey
@@ -964,8 +966,19 @@ class RemoteViewModel @Inject constructor(
     /** Presses or releases a button of the TV's pointer. */
     fun airButton(button: PointerButton, down: Boolean) = airMouse.button(button, down)
 
-    /** Scrolls at the TV's pointer by [notches] of the wheel, up being positive. */
-    fun airScroll(notches: Float) = airMouse.scroll(notches)
+    private val scrollKeys = ScrollKeys()
+
+    /**
+     * Scrolls the TV by [dx] notches sideways (right positive) and [dy] of the wheel (up positive):
+     * with D-pad keys by default, which TV apps scroll smoothly, or with the Bluetooth wheel.
+     */
+    fun airScroll(dx: Float, dy: Float) {
+        if (airMouse.settings.scrollWith == ScrollWith.MOUSE_WHEEL) {
+            airMouse.scroll(dx, dy)
+        } else {
+            scrollKeys.add(dx, dy).forEach { sendKey(it) }
+        }
+    }
 
     override fun onCleared() {
         super.onCleared()

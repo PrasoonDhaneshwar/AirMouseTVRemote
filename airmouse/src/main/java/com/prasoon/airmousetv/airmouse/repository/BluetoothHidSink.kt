@@ -207,8 +207,7 @@ class BluetoothHidSink(
 
     override suspend fun button(button: PointerButton, down: Boolean) = send(listOfNotNull(mouse.button(button, down)))
 
-    /** Sideways scrolling is dropped: the mouse the TV was told about has one wheel. */
-    override suspend fun scroll(dx: Float, dy: Float) = send(mouse.scroll(dy))
+    override suspend fun scroll(dx: Float, dy: Float) = send(mouse.scroll(dx, dy))
 
     private fun send(reports: List<ByteArray>) {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.P) return

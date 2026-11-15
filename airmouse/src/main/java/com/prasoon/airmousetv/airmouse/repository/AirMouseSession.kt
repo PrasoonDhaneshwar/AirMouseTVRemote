@@ -1,6 +1,7 @@
 package com.prasoon.airmousetv.airmouse.repository
 
 import android.content.Context
+import android.os.SystemClock
 import android.util.Log
 import com.prasoon.airmousetv.airmouse.api.CALIBRATION_SECONDS
 import com.prasoon.airmousetv.airmouse.api.GyroCalibration
@@ -11,6 +12,7 @@ import com.prasoon.airmousetv.airmouse.api.RECENTER_RETURN_STEP
 import com.prasoon.airmousetv.airmouse.api.recenterMoves
 import com.prasoon.airmousetv.airmouse.api.tvLinkKeys
 import com.prasoon.airmousetv.airmouse.api.toPointerSettings
+import com.prasoon.airmousetv.airmouse.api.WheelPacer
 import com.prasoon.airmousetv.airmouse.api.wakeMoves
 import com.prasoon.airmousetv.airmouse.model.AirMouseSettings
 import com.prasoon.airmousetv.airmouse.model.PointerButton
@@ -45,7 +47,7 @@ private const val PACED_MOVE_GAP_MS = 10L
 private sealed interface PointerEvent {
     data class Move(val dx: Float, val dy: Float) : PointerEvent
     data class Button(val button: PointerButton, val down: Boolean) : PointerEvent
-    data class Scroll(val notches: Float) : PointerEvent
+    data class Scroll(val dx: Float, val dy: Float) : PointerEvent
 
     /**
      * Movements sent one at a time with [PACED_MOVE_GAP_MS] between them. With [holdStill] the
@@ -89,6 +91,14 @@ class AirMouseSession private constructor(
 
     /** Ends the stillness after a press; replaced when another press starts before it has run. */
     private var unfreeze: Job? = null
+
+    /** Space out the turns of the wheel and of the sideways wheel, each on its own clock; see [WheelPacer]. */
+    private val wheel = WheelPacer()
+    private val pan = WheelPacer()
+
+    /** Send the turns [wheel] and [pan] held back; null when none are waiting. */
+    private var wheelFlush: Job? = null
+    private var panFlush: Job? = null
 
     val state: StateFlow<PointerLinkState> get() = sink.state
 
@@ -198,6 +208,10 @@ class AirMouseSession private constructor(
     fun stop() {
         sensors.stop()
         pipeline.reset()
+        wheelFlush?.cancel()
+        panFlush?.cancel()
+        wheel.reset()
+        pan.reset()
         hidSink.stop()
     }
 
@@ -236,9 +250,43 @@ class AirMouseSession private constructor(
         events.trySend(PointerEvent.Button(button, down))
     }
 
-    /** Scrolls at the pointer by [notches] of the wheel, up being positive. */
-    fun scroll(notches: Float) {
-        events.trySend(PointerEvent.Scroll(notches))
+    /** Scrolls at the pointer: [dy] notches of the wheel, up being positive, and [dx] sideways, right being positive. */
+    fun scroll(dx: Float, dy: Float) {
+        // Paced, so a TV app that animates each turn of the wheel gets every notch (see [WheelPacer])
+        if (dy != 0f) {
+            val toSend = wheel.add(dy, SystemClock.uptimeMillis())
+            if (toSend != null) events.trySend(PointerEvent.Scroll(0f, toSend)) else scheduleWheelFlush()
+        }
+        if (dx != 0f) {
+            val toSend = pan.add(dx, SystemClock.uptimeMillis())
+            if (toSend != null) events.trySend(PointerEvent.Scroll(toSend, 0f)) else schedulePanFlush()
+        }
+    }
+
+    /** The same as [scheduleWheelFlush], for the sideways wheel. */
+    @Synchronized
+    private fun schedulePanFlush() {
+        val due = pan.nextDueMs ?: return
+        panFlush?.cancel()
+        panFlush = scope.launch {
+            delay((due - SystemClock.uptimeMillis()).coerceAtLeast(0))
+            pan.flush(SystemClock.uptimeMillis())?.let { events.trySend(PointerEvent.Scroll(it, 0f)) }
+        }
+    }
+
+    /**
+     * Sends the notches the pacer held back once their time has come. Started afresh on every held-back
+     * notch rather than only when none is waiting: a send that is just finishing would otherwise still
+     * count as waiting, and the notch that came in meanwhile would be left until the next one.
+     */
+    @Synchronized
+    private fun scheduleWheelFlush() {
+        val due = wheel.nextDueMs ?: return
+        wheelFlush?.cancel()
+        wheelFlush = scope.launch {
+            delay((due - SystemClock.uptimeMillis()).coerceAtLeast(0))
+            wheel.flush(SystemClock.uptimeMillis())?.let { events.trySend(PointerEvent.Scroll(0f, it)) }
+        }
     }
 
     /** Brings the pointer back to about the middle of the screen, for when it has been lost at an edge. */
@@ -280,7 +328,7 @@ class AirMouseSession private constructor(
                 when (event) {
                     is PointerEvent.Move -> sink.move(event.dx, event.dy)
                     is PointerEvent.Button -> sink.button(event.button, event.down)
-                    is PointerEvent.Scroll -> sink.scroll(0f, event.notches)
+                    is PointerEvent.Scroll -> sink.scroll(event.dx, event.dy)
                     is PointerEvent.Paced -> try {
                         for (move in event.moves) {
                             sink.move(move.dx, move.dy)

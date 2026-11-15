@@ -4,6 +4,7 @@ import android.content.Context
 import androidx.core.content.edit
 import com.prasoon.airmousetv.airmouse.api.Vec3
 import com.prasoon.airmousetv.airmouse.model.AirMouseSettings
+import com.prasoon.airmousetv.airmouse.model.ScrollWith
 import com.prasoon.airmousetv.airmouse.model.VolumeButtons
 
 private const val PREFS = "air_mouse_settings"
@@ -23,7 +24,8 @@ class AirMouseSettingsStore(context: Context) {
             smoothAir = prefs.getFloat("smooth_air", defaults.smoothAir),
             volumeButtons = VolumeButtons.entries.firstOrNull { it.name == prefs.getString("volume_buttons", null) }
                 ?: defaults.volumeButtons,
-            airPointing = prefs.getBoolean("air_pointing", defaults.airPointing)
+            airPointing = prefs.getBoolean("air_pointing", defaults.airPointing),
+            scrollWith = ScrollWith.entries.firstOrNull { it.name == prefs.getString("scroll_with", null) } ?: defaults.scrollWith
         )
     }
 
@@ -33,6 +35,7 @@ class AirMouseSettingsStore(context: Context) {
             putFloat("smooth_air", settings.smoothAir)
             putString("volume_buttons", settings.volumeButtons.name)
             putBoolean("air_pointing", settings.airPointing)
+            putString("scroll_with", settings.scrollWith.name)
         }
     }
 

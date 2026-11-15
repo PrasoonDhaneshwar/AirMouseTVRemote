@@ -44,6 +44,7 @@ import androidx.compose.ui.unit.sp
 import com.prasoon.airmousetv.airmouse.api.CALIBRATION_SECONDS
 import com.prasoon.airmousetv.airmouse.model.AirMouseSettings
 import com.prasoon.airmousetv.airmouse.model.AirMouseUiState
+import com.prasoon.airmousetv.airmouse.model.ScrollWith
 import com.prasoon.airmousetv.airmouse.model.VolumeButtons
 import com.prasoon.airmousetv.ui.theme.AirMouseTVRemoteTheme
 import com.prasoon.airmousetv.ui.theme.Faint
@@ -111,6 +112,7 @@ private fun AirMouseSettingsContent(air: AirMouseUiState, tvName: String, action
             Calibrate(air.calibrating, air.calibrated, actions.onCalibrate)
             VolumeButtonsChoice(settings.volumeButtons) { actions.onChange(settings.copy(volumeButtons = it)) }
         }
+        ScrollWithChoice(settings.scrollWith) { actions.onChange(settings.copy(scrollWith = it)) }
 
         Row(verticalAlignment = Alignment.CenterVertically) {
             Column(Modifier.weight(1f)) {
@@ -229,6 +231,23 @@ private fun VolumeButtonsChoice(selected: VolumeButtons, onSelect: (VolumeButton
             VolumeOption("Vol + clicks, Vol − is Back", selected == VolumeButtons.CLICK_AND_BACK) { onSelect(VolumeButtons.CLICK_AND_BACK) }
             VolumeOption("Swapped: Vol − clicks, Vol + is Back", selected == VolumeButtons.SWAPPED) { onSelect(VolumeButtons.SWAPPED) }
             VolumeOption("Change the TV's volume", selected == VolumeButtons.TV_VOLUME) { onSelect(VolumeButtons.TV_VOLUME) }
+        }
+    }
+}
+
+@Composable
+private fun ScrollWithChoice(selected: ScrollWith, onSelect: (ScrollWith) -> Unit) {
+    Column {
+        Row(verticalAlignment = Alignment.Bottom, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+            Text("Scroll with", style = MaterialTheme.typography.titleMedium)
+            Text(
+                "· two fingers and the strips",
+                style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        }
+        Column(Modifier.selectableGroup()) {
+            VolumeOption("TV keys: smooth in most TV apps", selected == ScrollWith.TV_KEYS) { onSelect(ScrollWith.TV_KEYS) }
+            VolumeOption("Mouse wheel: for browsers and maps", selected == ScrollWith.MOUSE_WHEEL) { onSelect(ScrollWith.MOUSE_WHEEL) }
         }
     }
 }

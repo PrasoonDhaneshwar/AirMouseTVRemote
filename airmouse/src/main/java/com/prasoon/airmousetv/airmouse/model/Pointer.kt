@@ -91,6 +91,19 @@ enum class AirMouseSetupStep {
     UNSUPPORTED,
 }
 
+/**
+ * What scrolling on the pad sends to the TV. Most TV apps scroll their lists by focus and handle a
+ * mouse wheel badly (SmartTube drops notches, some ignore it), so D-pad keys are the default; the
+ * wheel is for apps that scroll by it, such as browsers and maps.
+ */
+enum class ScrollWith {
+    /** D-pad keys over Wi-Fi, as the touchpad sends them. */
+    TV_KEYS,
+
+    /** The Bluetooth mouse wheel, and its sideways wheel. */
+    MOUSE_WHEEL,
+}
+
 /** What the phone's volume buttons do while air pointing is on. */
 enum class VolumeButtons {
     /** Volume up clicks at the pointer, volume down is Back. */
@@ -113,4 +126,5 @@ data class AirMouseSettings(
     val volumeButtons: VolumeButtons = VolumeButtons.CLICK_AND_BACK,
     /** True if moving the phone moves the pointer; false if the pad is used as a mouse pad. */
     val airPointing: Boolean = true,
+    val scrollWith: ScrollWith = ScrollWith.TV_KEYS,
 )

@@ -18,11 +18,14 @@ const val HID_AXIS_MAX = 127
 const val MAX_REPORTS_PER_MOVE = 8
 
 /**
- * What the phone tells the TV it is: a three-button mouse with a wheel, reporting relative movement.
+ * What the phone tells the TV it is: a three-button mouse with a wheel and a sideways wheel,
+ * reporting relative movement.
  *
  * It is a mouse only, on purpose. A descriptor that also declares a keyboard makes Android treat
  * the phone as a hardware keyboard, and Android hides its on-screen keyboard while one is connected.
- * The TV reads this table once, when it pairs, so adding a keyboard later means pairing again.
+ * The TV reads this table once, when it pairs, so adding a keyboard later means pairing again. The
+ * same went for the sideways wheel (AC Pan): a TV paired before it was added has to pair again to
+ * scroll sideways.
  */
 val HID_MOUSE_DESCRIPTOR: ByteArray = intArrayOf(
     0x05, 0x01,        // Usage Page (Generic Desktop)
@@ -51,6 +54,10 @@ val HID_MOUSE_DESCRIPTOR: ByteArray = intArrayOf(
     0x75, 0x08,        //     Report Size (8)
     0x95, 0x03,        //     Report Count (3)
     0x81, 0x06,        //     Input (Data, Variable, Relative): X, Y, wheel
+    0x05, 0x0C,        //     Usage Page (Consumer)
+    0x0A, 0x38, 0x02,  //     Usage (AC Pan): the sideways wheel
+    0x95, 0x01,        //     Report Count (1)
+    0x81, 0x06,        //     Input (Data, Variable, Relative): pan
     0xC0,              //   End Collection
     0xC0               // End Collection
 ).map { it.toByte() }.toByteArray()
@@ -63,8 +70,8 @@ private val PointerButton.mask: Int
     }
 
 /**
- * Turns pointer movement, buttons and scrolling into mouse reports, each four bytes: buttons, X, Y,
- * wheel.
+ * Turns pointer movement, buttons and scrolling into mouse reports, each five bytes: buttons, X, Y,
+ * wheel, pan.
  *
  * A report carries whole counts, while slow pointing produces fractions of a count per frame. The
  * fractions are carried over to the next movement, so a slow sweep still adds up to the distance
@@ -76,6 +83,7 @@ class HidMouse {
     private var carryX = 0f
     private var carryY = 0f
     private var carryWheel = 0f
+    private var carryPan = 0f
 
     /** The reports that move the pointer by [dx], [dy] counts; empty while the movement is still under one count. */
     @Synchronized
@@ -108,17 +116,25 @@ class HidMouse {
         return report(0, 0, 0)
     }
 
-    /** The reports that turn the wheel by [notches], up being positive; empty while under one notch. */
+    /**
+     * The reports that turn the wheel by [dy] notches, up being positive, and the sideways wheel by
+     * [dx], right being positive; empty while both are under one notch.
+     */
     @Synchronized
-    fun scroll(notches: Float): List<ByteArray> {
-        carryWheel += notches
+    fun scroll(dx: Float, dy: Float): List<ByteArray> {
+        carryPan += dx
+        carryWheel += dy
+        var pan = carryPan.roundToInt()
         var wheel = carryWheel.roundToInt()
+        carryPan -= pan
         carryWheel -= wheel
         val reports = ArrayList<ByteArray>(1)
-        while (wheel != 0 && reports.size < MAX_REPORTS_PER_MOVE) {
-            val step = wheel.coerceIn(-HID_AXIS_MAX, HID_AXIS_MAX)
-            reports += report(0, 0, step)
-            wheel -= step
+        while ((pan != 0 || wheel != 0) && reports.size < MAX_REPORTS_PER_MOVE) {
+            val stepWheel = wheel.coerceIn(-HID_AXIS_MAX, HID_AXIS_MAX)
+            val stepPan = pan.coerceIn(-HID_AXIS_MAX, HID_AXIS_MAX)
+            reports += report(0, 0, stepWheel, stepPan)
+            wheel -= stepWheel
+            pan -= stepPan
         }
         return reports
     }
@@ -132,10 +148,12 @@ class HidMouse {
         carryX = 0f
         carryY = 0f
         carryWheel = 0f
+        carryPan = 0f
         if (buttons == 0) return null
         buttons = 0
         return report(0, 0, 0)
     }
 
-    private fun report(x: Int, y: Int, wheel: Int) = byteArrayOf(buttons.toByte(), x.toByte(), y.toByte(), wheel.toByte())
+    private fun report(x: Int, y: Int, wheel: Int, pan: Int = 0) =
+        byteArrayOf(buttons.toByte(), x.toByte(), y.toByte(), wheel.toByte(), pan.toByte())
 }

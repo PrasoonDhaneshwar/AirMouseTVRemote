@@ -38,6 +38,8 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.VolumeUp
 import androidx.compose.material.icons.filled.Bluetooth
+import androidx.compose.material.icons.automirrored.filled.KeyboardArrowLeft
+import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.KeyboardArrowUp
 import androidx.compose.material.icons.filled.MyLocation
@@ -124,8 +126,8 @@ internal class AirPadActions(
     /** The finger slid by this many dp, over this many seconds, with the pad used as a mouse pad. */
     val onSlide: (dxDp: Float, dyDp: Float, dtSeconds: Float) -> Unit = { _, _, _ -> },
     val onButton: (PointerButton, down: Boolean) -> Unit = { _, _ -> },
-    /** Scroll by this many wheel notches, up being positive. */
-    val onScroll: (Float) -> Unit = {},
+    /** Scroll by this many notches sideways (right positive) and of the wheel (up positive). */
+    val onScroll: (dx: Float, dy: Float) -> Unit = { _, _ -> },
     val onRecenter: () -> Unit = {},
     /** The Air pointing switch was turned on or off. */
     val onAirPointing: (Boolean) -> Unit = {},
@@ -224,8 +226,12 @@ private fun BoxScope.PointingSurface(settings: AirMouseSettings, hasGyroscope: B
                             // lifted, or the finger that lifts last would drag the pointer along
                             if (fingers.size >= 2) scrolling = true
                             if (scrolling) {
-                                // Like a touch screen: the page follows the fingers, so fingers moving down turn the wheel up
-                                if (fingers.size >= 2) currentActions.onScroll(delta.y / SCROLL_DP_PER_NOTCH.dp.toPx())
+                                // Like a touch screen: the page follows the fingers, so fingers moving down turn
+                                // the wheel up and fingers moving right scroll left
+                                if (fingers.size >= 2) {
+                                    val notchPx = SCROLL_DP_PER_NOTCH.dp.toPx()
+                                    currentActions.onScroll(-delta.x / notchPx, delta.y / notchPx)
+                                }
                             } else {
                                 travelled += delta
                                 // A resting finger is never perfectly still. Until it has clearly moved it is
@@ -264,7 +270,7 @@ private fun BoxScope.PointingSurface(settings: AirMouseSettings, hasGyroscope: B
                     textAlign = TextAlign.Center
                 )
                 Text(
-                    if (frozen) "Lift your finger to point again" else "Tap to click · hold to freeze and re-aim",
+                    if (frozen) "Lift your finger to point again" else "Tap to click · two fingers to scroll in any direction",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     textAlign = TextAlign.Center
@@ -279,7 +285,7 @@ private fun BoxScope.PointingSurface(settings: AirMouseSettings, hasGyroscope: B
             } else {
                 Text("Slide to move the pointer", style = MaterialTheme.typography.bodyMedium, textAlign = TextAlign.Center)
                 Text(
-                    "Tap to click · two fingers to scroll",
+                    "Tap to click · two fingers to scroll in any direction",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     textAlign = TextAlign.Center
@@ -295,15 +301,22 @@ private fun BoxScope.PointingSurface(settings: AirMouseSettings, hasGyroscope: B
         )
     }
     val volumeHint = volumeHint(settings).takeIf { airPointing }
+    // The strips sit in the same place whatever the pad is doing: up and down on the right, sideways along the bottom
     ScrollStrip(
-        onScroll = { currentActions.onScroll(it) },
-        modifier = Modifier.align(Alignment.CenterEnd).padding(end = 12.dp, top = 60.dp, bottom = if (volumeHint != null) 56.dp else 16.dp)
+        horizontal = false,
+        onScroll = { currentActions.onScroll(0f, it) },
+        modifier = Modifier.align(Alignment.CenterEnd).padding(end = 12.dp, top = 56.dp, bottom = 56.dp)
+    )
+    ScrollStrip(
+        horizontal = true,
+        onScroll = { currentActions.onScroll(it, 0f) },
+        modifier = Modifier.align(Alignment.BottomStart).padding(start = 12.dp, end = 56.dp, bottom = 12.dp)
     )
     if (volumeHint != null) {
         Row(
             modifier = Modifier
                 .align(Alignment.BottomCenter)
-                .padding(bottom = 12.dp)
+                .padding(bottom = 56.dp)
                 .background(SheetSurface, CircleShape)
                 .padding(horizontal = 12.dp, vertical = 6.dp),
             verticalAlignment = Alignment.CenterVertically,
@@ -373,50 +386,69 @@ private fun AirPointingSwitch(on: Boolean, onChange: (Boolean) -> Unit, modifier
 }
 
 /**
- * A strip to drag up and down, for scrolling with one finger. Like a mouse wheel, dragging up
- * scrolls up. Each notch sent ticks, so it can be used without looking.
+ * A strip to drag along, for scrolling with one finger: up and down on the right edge, left and
+ * right along the bottom. Like a mouse wheel, dragging up scrolls up and dragging right scrolls
+ * right. Each notch sent ticks, so it can be used without looking. [onScroll] gets whole notches
+ * along the strip's own direction.
  */
 @Composable
-private fun ScrollStrip(onScroll: (Float) -> Unit, modifier: Modifier = Modifier) {
+private fun ScrollStrip(horizontal: Boolean, onScroll: (Float) -> Unit, modifier: Modifier = Modifier) {
     val currentOnScroll by rememberUpdatedState(onScroll)
     val view = LocalView.current
-    Column(
-        modifier = modifier
-            .fillMaxHeight()
-            .width(34.dp)
-            .clip(CircleShape)
-            .background(MaterialTheme.colorScheme.surfaceVariant)
-            .semantics { contentDescription = "Scroll strip. Drag up or down to scroll on the TV." }
-            .pointerInput(Unit) {
-                val notchPx = SCROLL_DP_PER_NOTCH.dp.toPx()
-                awaitEachGesture {
-                    // Consumed, so the pad underneath doesn't take this finger for a tap or a hold
-                    awaitFirstDown().consume()
-                    var dragged = 0f
-                    while (true) {
-                        val change = awaitPointerEvent().changes.firstOrNull { it.pressed } ?: break
-                        dragged += change.positionChange().y
-                        change.consume()
-                        // Whole notches only, so each one sent can be felt
-                        while (abs(dragged) >= notchPx) {
-                            val up = dragged < 0
-                            currentOnScroll(if (up) 1f else -1f)
-                            view.performHapticFeedback(HapticFeedbackConstants.CLOCK_TICK)
-                            dragged += if (up) notchPx else -notchPx
-                        }
+    val hint = MaterialTheme.colorScheme.onSurfaceVariant
+    val strip = modifier
+        .then(if (horizontal) Modifier.fillMaxWidth().height(34.dp) else Modifier.fillMaxHeight().width(34.dp))
+        .clip(CircleShape)
+        .background(MaterialTheme.colorScheme.surfaceVariant)
+        .semantics {
+            contentDescription = if (horizontal) "Sideways scroll strip. Drag left or right to scroll on the TV."
+            else "Scroll strip. Drag up or down to scroll on the TV."
+        }
+        .pointerInput(horizontal) {
+            val notchPx = SCROLL_DP_PER_NOTCH.dp.toPx()
+            awaitEachGesture {
+                // Consumed, so the pad underneath doesn't take this finger for a tap or a hold
+                awaitFirstDown().consume()
+                var dragged = 0f
+                while (true) {
+                    val change = awaitPointerEvent().changes.firstOrNull { it.pressed } ?: break
+                    val move = change.positionChange()
+                    // Dragging up (a negative y) and dragging right both scroll the positive way
+                    dragged += if (horizontal) -move.x else move.y
+                    change.consume()
+                    // Whole notches only, so each one sent can be felt
+                    while (abs(dragged) >= notchPx) {
+                        val positive = dragged < 0
+                        currentOnScroll(if (positive) 1f else -1f)
+                        view.performHapticFeedback(HapticFeedbackConstants.CLOCK_TICK)
+                        dragged += if (positive) notchPx else -notchPx
                     }
                 }
             }
-            .padding(vertical = 8.dp),
-        horizontalAlignment = Alignment.CenterHorizontally,
-        verticalArrangement = Arrangement.SpaceBetween
-    ) {
-        val hint = MaterialTheme.colorScheme.onSurfaceVariant
-        Icon(Icons.Default.KeyboardArrowUp, contentDescription = null, tint = hint, modifier = Modifier.size(18.dp))
-        Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-            repeat(3) { Box(Modifier.size(4.dp).background(Faint, CircleShape)) }
         }
-        Icon(Icons.Default.KeyboardArrowDown, contentDescription = null, tint = hint, modifier = Modifier.size(18.dp))
+    val dots = @Composable {
+        repeat(3) { Box(Modifier.size(4.dp).background(Faint, CircleShape)) }
+    }
+    if (horizontal) {
+        Row(
+            modifier = strip.padding(horizontal = 8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.SpaceBetween
+        ) {
+            Icon(Icons.AutoMirrored.Filled.KeyboardArrowLeft, contentDescription = null, tint = hint, modifier = Modifier.size(18.dp))
+            Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) { dots() }
+            Icon(Icons.AutoMirrored.Filled.KeyboardArrowRight, contentDescription = null, tint = hint, modifier = Modifier.size(18.dp))
+        }
+    } else {
+        Column(
+            modifier = strip.padding(vertical = 8.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.SpaceBetween
+        ) {
+            Icon(Icons.Default.KeyboardArrowUp, contentDescription = null, tint = hint, modifier = Modifier.size(18.dp))
+            Column(verticalArrangement = Arrangement.spacedBy(4.dp)) { dots() }
+            Icon(Icons.Default.KeyboardArrowDown, contentDescription = null, tint = hint, modifier = Modifier.size(18.dp))
+        }
     }
 }
 

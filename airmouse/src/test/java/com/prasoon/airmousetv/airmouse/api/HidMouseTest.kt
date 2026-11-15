@@ -9,8 +9,8 @@ import org.junit.Test
 
 class HidMouseTest {
 
-    private fun report(buttons: Int = 0, x: Int = 0, y: Int = 0, wheel: Int = 0) =
-        byteArrayOf(buttons.toByte(), x.toByte(), y.toByte(), wheel.toByte())
+    private fun report(buttons: Int = 0, x: Int = 0, y: Int = 0, wheel: Int = 0, pan: Int = 0) =
+        byteArrayOf(buttons.toByte(), x.toByte(), y.toByte(), wheel.toByte(), pan.toByte())
 
     /** Adds up what a list of reports moves the pointer by. */
     private fun List<ByteArray>.travel() = sumOf { it[1].toInt() } to sumOf { it[2].toInt() }
@@ -113,15 +113,26 @@ class HidMouseTest {
 
     @Test
     fun `scrolling turns the wheel and moves nothing`() {
-        assertArrayEquals(report(wheel = 1), HidMouse().scroll(1f).single())
-        assertArrayEquals(report(wheel = -2), HidMouse().scroll(-2f).single())
+        assertArrayEquals(report(wheel = 1), HidMouse().scroll(0f, 1f).single())
+        assertArrayEquals(report(wheel = -2), HidMouse().scroll(0f, -2f).single())
+    }
+
+    @Test
+    fun `scrolling sideways turns the pan wheel only`() {
+        assertArrayEquals(report(pan = 1), HidMouse().scroll(1f, 0f).single())
+        assertArrayEquals(report(pan = -3), HidMouse().scroll(-3f, 0f).single())
+    }
+
+    @Test
+    fun `a diagonal scroll is one report with both wheels`() {
+        assertArrayEquals(report(wheel = 2, pan = -1), HidMouse().scroll(-1f, 2f).single())
     }
 
     @Test
     fun `part of a notch is held back until it adds up`() {
         val mouse = HidMouse()
-        assertTrue(mouse.scroll(0.4f).isEmpty())
-        assertArrayEquals(report(wheel = 1), mouse.scroll(0.4f).single())
+        assertTrue(mouse.scroll(0f, 0.4f).isEmpty())
+        assertArrayEquals(report(wheel = 1), mouse.scroll(0f, 0.4f).single())
     }
 
     @Test
