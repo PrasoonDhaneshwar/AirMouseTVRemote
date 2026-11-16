@@ -1,0 +1,43 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- The themed (Android 13+) version of the icon: one colour, and the remote cuts the TV's frame
+     away instead of hiding it, so the TV's right edge and the end of its bottom edge are left out. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <path
+        android:strokeColor="#FFFFFF"
+        android:strokeWidth="5"
+        android:strokeLineCap="round"
+        android:pathData="M58,70 H33 A7,7 0 0 1 26,63 V47 A7,7 0 0 1 33,40 H61 A7,7 0 0 1 68,47" />
+    <path
+        android:fillColor="#FFFFFF"
+        android:strokeColor="#FFFFFF"
+        android:strokeWidth="2"
+        android:strokeLineJoin="round"
+        android:pathData="M35.5,46.5 L35.5,64 L40,59.5 L43.2,66.3 L46.4,64.9 L43.2,58.2 L49,58.2 Z" />
+    <group
+        android:pivotX="72"
+        android:pivotY="62"
+        android:rotation="12">
+        <path
+            android:strokeColor="#FFFFFF"
+            android:strokeWidth="3.5"
+            android:pathData="M72,47 A7,7 0 0 1 79,54 V70 A7,7 0 0 1 72,77 A7,7 0 0 1 65,70 V54 A7,7 0 0 1 72,47 Z" />
+        <path
+            android:fillColor="#FFFFFF"
+            android:pathData="M72,51.2 A3.3,3.3 0 1 1 72,57.8 A3.3,3.3 0 1 1 72,51.2 Z M72,61.5 A2,2 0 1 1 72,65.5 A2,2 0 1 1 72,61.5 Z M72,67.5 A2,2 0 1 1 72,71.5 A2,2 0 1 1 72,67.5 Z" />
+    </group>
+    <path
+        android:strokeColor="#FFFFFF"
+        android:strokeWidth="4"
+        android:strokeLineCap="round"
+        android:pathData="M72.03,41.27 A6,6 0 0 1 80.33,43.03" />
+    <path
+        android:strokeColor="#FFFFFF"
+        android:strokeAlpha="0.6"
+        android:strokeWidth="4"
+        android:strokeLineCap="round"
+        android:pathData="M69.58,37.49 A10.5,10.5 0 0 1 84.11,40.58" />
+</vector>
