@@ -45,6 +45,10 @@ import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.KeyboardArrowUp
 import androidx.compose.material.icons.filled.MyLocation
 import androidx.compose.material.icons.filled.NearMe
+import androidx.compose.material.icons.filled.OpenWith
+import androidx.compose.material.icons.filled.PhoneAndroid
+import androidx.compose.material.icons.filled.TouchApp
+import androidx.compose.material.icons.filled.UnfoldMore
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
@@ -60,6 +64,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
@@ -70,6 +75,7 @@ import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.drawscope.rotate
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.input.pointer.positionChange
 import androidx.compose.ui.platform.LocalContext
@@ -194,6 +200,20 @@ private fun BoxScope.PointingSurface(settings: AirMouseSettings, hasGyroscope: B
     Box(
         modifier = Modifier
             .fillMaxSize()
+            .then(
+                if (airPointing) Modifier else Modifier.drawBehind {
+                    val gap = 22.dp.toPx()
+                    var y = gap / 2
+                    while (y < size.height) {
+                        var x = gap / 2
+                        while (x < size.width) {
+                            drawCircle(PadDots, radius = 1.2.dp.toPx(), center = Offset(x, y))
+                            x += gap
+                        }
+                        y += gap
+                    }
+                }
+            )
             .semantics {
                 contentDescription = if (airPointing) {
                     "Air mouse pad. Move the phone to move the pointer on the TV. Double-tap to click. Drag a finger to scroll."
@@ -266,35 +286,8 @@ private fun BoxScope.PointingSurface(settings: AirMouseSettings, hasGyroscope: B
                 }
             },
         contentAlignment = Alignment.Center
-    ) {
-        Column(
-            modifier = Modifier.padding(horizontal = 52.dp),
-            horizontalAlignment = Alignment.CenterHorizontally,
-            verticalArrangement = Arrangement.spacedBy(10.dp)
-        ) {
-            if (airPointing) {
-                Text(
-                    "Move the phone to point · tap to click · drag to scroll in any direction",
-                    style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.Medium),
-                    textAlign = TextAlign.Center
-                )
-                Text(
-                    "Pauses when the phone is put down",
-                    style = MaterialTheme.typography.bodySmall.copy(fontSize = 11.sp),
-                    color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
-                    textAlign = TextAlign.Center
-                )
-            } else {
-                Text("Slide to move the pointer", style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.Medium), textAlign = TextAlign.Center)
-                Text(
-                    "Tap to click · two fingers to scroll in any direction",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    textAlign = TextAlign.Center
-                )
-            }
-        }
-    }
+    ) {}
+    PadHint(airPointing, faded = airPointing && hintFaded())
     val volumeHint = volumeHint(settings).takeIf { airPointing }
     // With air pointing on, one finger scrolls anywhere on the pad, so there are no strips to aim for.
     // As a mouse pad a finger moves the pointer, so scrolling has two fingers or the strips: up and
@@ -327,6 +320,82 @@ private fun BoxScope.PointingSurface(settings: AirMouseSettings, hasGyroscope: B
             )
             Text(volumeHint, style = MaterialTheme.typography.bodySmall)
         }
+    }
+}
+
+/** The dots of the mouse pad's surface, which tell it from the air pointing pad at a glance. */
+private val PadDots = Color(0xFF2E343C)
+
+/** How many times the app has been opened with the air mouse pad shown before this launch; see [hintFaded]. */
+private const val PREF_AIR_PAD_LAUNCHES = "air_pad_launches"
+
+/** After this many launches the pad's list of gestures shrinks to one faint line, since by then they're known. */
+private const val HINT_LIST_LAUNCHES = 3
+
+/** The launch count as it was when the app started, so the hint doesn't change under the user's thumb mid-use. */
+private var launchesBeforeThis: Int? = null
+
+/** True once the gestures have been shown on [HINT_LIST_LAUNCHES] launches; counts this launch the first time it is asked. */
+@Composable
+private fun hintFaded(): Boolean {
+    val prefs = LocalContext.current.getSharedPreferences("remote_ui", android.content.Context.MODE_PRIVATE)
+    val before = launchesBeforeThis ?: prefs.getInt(PREF_AIR_PAD_LAUNCHES, 0).also {
+        launchesBeforeThis = it
+        prefs.edit().putInt(PREF_AIR_PAD_LAUNCHES, (it + 1).coerceAtMost(1000)).apply()
+    }
+    return before >= HINT_LIST_LAUNCHES
+}
+
+/**
+ * What the pad tells the user to do, quietly: a short list low on the pad with a muted icon per
+ * row, in regular weight so it reads as a hint and not a heading. As a mouse pad it sits clear of
+ * the scroll strips. After a few launches the air pointing list shrinks to one faint line.
+ */
+@Composable
+private fun BoxScope.PadHint(airPointing: Boolean, faded: Boolean) {
+    val muted = MaterialTheme.colorScheme.onSurfaceVariant
+    if (faded) {
+        Text(
+            "Tap to click · swipe to scroll",
+            style = MaterialTheme.typography.bodySmall.copy(fontSize = 12.sp),
+            color = muted.copy(alpha = 0.75f),
+            textAlign = TextAlign.Center,
+            modifier = Modifier.align(Alignment.BottomCenter).padding(bottom = 22.dp)
+        )
+        return
+    }
+    Column(
+        modifier = Modifier
+            .align(Alignment.BottomStart)
+            .padding(start = 24.dp, end = if (airPointing) 24.dp else 60.dp, bottom = if (airPointing) 24.dp else 62.dp),
+        verticalArrangement = Arrangement.spacedBy(10.dp)
+    ) {
+        if (airPointing) {
+            HintRow(Icons.Default.PhoneAndroid, "Move the phone to point")
+            HintRow(Icons.Default.TouchApp, "Tap to click")
+            HintRow(Icons.Default.OpenWith, "Swipe to scroll")
+            Text(
+                "Pauses when the phone is put down",
+                style = MaterialTheme.typography.bodySmall.copy(fontSize = 12.sp),
+                color = muted.copy(alpha = 0.75f),
+                modifier = Modifier.padding(start = 44.dp)
+            )
+        } else {
+            HintRow(Icons.Default.NearMe, "Slide to move")
+            HintRow(Icons.Default.TouchApp, "Tap to click")
+            HintRow(Icons.Default.UnfoldMore, "Two fingers or the strips to scroll")
+        }
+    }
+}
+
+@Composable
+private fun HintRow(icon: ImageVector, text: String) {
+    val muted = MaterialTheme.colorScheme.onSurfaceVariant
+    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+        Box(Modifier.size(32.dp).background(SheetSurface, RoundedCornerShape(10.dp)), contentAlignment = Alignment.Center) {
+            Icon(icon, contentDescription = null, tint = muted.copy(alpha = 0.85f), modifier = Modifier.size(20.dp))
+        }
+        Text(text, style = MaterialTheme.typography.bodyMedium.copy(fontSize = 14.sp), color = muted)
     }
 }
 
