@@ -208,7 +208,7 @@ chosen on any phone.
 | Tap the pad | Click at the cursor |
 | Vol + (Air pointing on) | Click, held for as long as the button is |
 | Vol − (Air pointing on) | Back, sent over Wi-Fi like the Back key |
-| Scroll strip, or two-finger drag | Scroll at the cursor |
+| Two-finger drag, or a strip (up and down on the right edge, left and right along the bottom) | Scroll in any direction. Sent as D-pad keys by default, or as the mouse wheel and its sideways wheel (settings: "Scroll with") |
 
 The volume buttons can be swapped, or left to the TV's volume, in the settings. There is no
 right-click control: Back is the remote's Back key or Vol −.
@@ -342,7 +342,7 @@ hid.sendReport(tvDevice, MOUSE_REPORT_ID, report)            // buttons, dx, dy,
 - **A native pointer.** Its look, hiding after a few seconds idle, and hiding when the D-pad is
   used are all handled by the TV.
 - **Real mouse events.** Most views treat a primary-button click like a tap, and the wheel scrolls
-  lists.
+  lists in apps built for a mouse. Many TV apps scroll by focus instead and handle the wheel badly (7.9).
 - **The right button.** On Android it commonly acts as **Back** when the app doesn't use it. If
   that holds on our TVs, it settles the right-button question in section 12.
 - **Pointer speed.** The TV applies its own pointer speed setting on top of our curve, so the gain
@@ -441,7 +441,9 @@ paired. The link came up within about 3 s each time the pad opened. Measured on 
 | Vol − on the phone reached the TV as Back; Vol + as a click; the phone's own volume stayed put | The volume buttons work as designed while pointing |
 | Calibration on a phone lying on a table took about 3 s and measured a drift of about 0.0001 rad/s | This phone's gyroscope already corrects itself; the calibration is for phones that don't |
 
-Not yet tried: pointing by moving the phone, freezing with a held finger, pausing when put down,
+**Third session (16 November 2026).** After the sideways wheel was added, scrolling with the Bluetooth wheel felt worse in real use on the TV, while the touchpad's D-pad keys scrolled lists smoothly. TV apps are built around focus: a key press moves focus and the app scrolls its own list, whereas a wheel event is handled per app, and some ignore it or drop notches. So scrolling now sends D-pad keys by default and keeps the wheel as a setting. Pairing was not redone before that first test, so part of the difference may have come from the TV still holding the old descriptor; not separated yet.
+
+Not yet tried: pointing by moving the phone, pausing when put down, sideways scrolling in a browser,
 the reconnecting waves (they need the TV out of range), and a first-time setup with the new
 phone-started pairing.
 
@@ -566,6 +568,10 @@ revisiting the no-Navigation decision, together with the UI overhaul.
 | Nov 2026 | The phone is a Bluetooth mouse only, not a keyboard too | A keyboard in the descriptor makes Android TV treat the phone as a hardware keyboard and hide its on-screen keyboard. The cost: adding the keyboard later (7.5) means pairing again |
 | Nov 2026 | The air mouse lives in its own module, `:airmouse`; its screens stay in the app | Fast to build and test by itself, and separable for a paid feature. Moving the screens too would need a shared UI module first |
 | Nov 2026 | The setup screens carry remote keys | The setup must not need the TV's own remote |
-| Nov 2026 | One pad with an "Air pointing" switch, no rest-your-thumb clutch, no Click or Right keys; tap to click, hold to freeze, Vol + clicks and Vol − is Back while pointing; Recenter is the one key | Pointing shouldn't need a thumb parked on the screen, and the click belongs where the hand already is |
+| Nov 2026 | One pad with an "Air pointing" switch, no rest-your-thumb clutch, no Click or Right keys; tap to click, Vol + clicks and Vol − is Back while pointing; Recenter is the one key. Hold to freeze was dropped (the pointer still holds still while a finger is down, since landing jolts the phone) | Pointing shouldn't need a thumb parked on the screen, and the click belongs where the hand already is |
 | Nov 2026 | The air mouse is shown to everyone as a Pro feature, but only on phones known to have the Bluetooth mouse role | Nobody should be offered it and then told the phone can't do it |
 | Nov 2026 | No paywall yet: the PRO mark is shown, the price line is left out | Pricing is not decided |
+| Nov 2026 | The Air pointing switch is an icon key beside Recenter, off the pad; a one-time line explains it | A tap on the pad can never flip it, and the pad keeps its room. It needs the hint and an accessibility label because it has no text |
+| Nov 2026 | Scrolling works in any direction: two fingers, and strips on the right edge and along the bottom, in the same place whether Air pointing is on or off | Sideways scrolling needs the sideways wheel (AC Pan) in the HID descriptor, so every TV paired before it was added has to pair again |
+| Nov 2026 | Scrolling sends D-pad keys by default; the mouse wheel is a setting ("Scroll with") | On the Hisense Android TV 9 the touchpad's keys scroll lists smoothly in every app, while the wheel is dropped or ignored by some (7.9). The wheel stays for browsers and maps |
+| Nov 2026 | App icon L3b: a TV with the pointer, a tilted remote and two waves, on a flat #161A1F background; adaptive icon with a themed monochrome layer, PNGs for Android 7, a 512 px store icon in `docs/store/` | Chosen from the canvas. `docs/design/render-icon.ps1` redraws the PNGs from the same geometry as the vector |
