@@ -208,7 +208,7 @@ chosen on any phone.
 | Tap the pad | Click at the cursor |
 | Vol + (Air pointing on) | Click, held for as long as the button is |
 | Vol − (Air pointing on) | Back, sent over Wi-Fi like the Back key |
-| Two-finger drag, or a strip (up and down on the right edge, left and right along the bottom) | Scroll in any direction. Sent as D-pad keys by default, or as the mouse wheel and its sideways wheel (settings: "Scroll with") |
+| Air pointing on: drag one finger anywhere on the pad. Air pointing off: two-finger drag, or a strip (up and down on the right edge, left and right along the bottom) | Scroll in any direction. Sent as D-pad keys by default, or as the mouse wheel and its sideways wheel (settings: "Scroll with") |
 
 The volume buttons can be swapped, or left to the TV's volume, in the settings. There is no
 right-click control: Back is the remote's Back key or Vol −.
@@ -572,6 +572,7 @@ revisiting the no-Navigation decision, together with the UI overhaul.
 | Nov 2026 | The air mouse is shown to everyone as a Pro feature, but only on phones known to have the Bluetooth mouse role | Nobody should be offered it and then told the phone can't do it |
 | Nov 2026 | No paywall yet: the PRO mark is shown, the price line is left out | Pricing is not decided |
 | Nov 2026 | The Air pointing switch is an icon key beside Recenter, off the pad; a one-time line explains it | A tap on the pad can never flip it, and the pad keeps its room. It needs the hint and an accessibility label because it has no text |
-| Nov 2026 | Scrolling works in any direction: two fingers, and strips on the right edge and along the bottom, in the same place whether Air pointing is on or off | Sideways scrolling needs the sideways wheel (AC Pan) in the HID descriptor, so every TV paired before it was added has to pair again |
+| Nov 2026 | Scrolling works in any direction. With Air pointing on, one finger dragged anywhere on the pad scrolls (the pointer needs no finger, and two fingers or an edge strip were hit and miss while holding the phone in the air). As a mouse pad a finger moves the pointer, so it keeps two fingers and strips on the right edge and along the bottom | Sideways scrolling needs the sideways wheel (AC Pan) in the HID descriptor, so every TV paired before it was added has to pair again |
 | Nov 2026 | Scrolling sends D-pad keys by default; the mouse wheel is a setting ("Scroll with") | On the Hisense Android TV 9 the touchpad's keys scroll lists smoothly in every app, while the wheel is dropped or ignored by some (7.9). The wheel stays for browsers and maps |
 | Nov 2026 | App icon L3b: a TV with the pointer, a tilted remote and two waves, on a flat #161A1F background; adaptive icon with a themed monochrome layer, PNGs for Android 7, a 512 px store icon in `docs/store/` | Chosen from the canvas. `docs/design/render-icon.ps1` redraws the PNGs from the same geometry as the vector |
+| Nov 2026 | Swiping or two-finger scrolling on the pad goes the touchpad's way: fingers down scroll down (the Down key, or the wheel down), fingers right scroll right | The pad and the touchpad had opposite directions. The strips already agreed with the touchpad |

@@ -144,9 +144,10 @@ internal class AirPadActions(
  *
  * With Air pointing on, the TV's pointer follows the phone and no finger has to be on the screen.
  * A tap clicks, and the pointer holds still while a finger is down, since landing jolts the phone;
- * pointing pauses by itself when the phone is put down. With it off the pad is a laptop-style
- * mouse pad: slide to move, tap to click. In both, two fingers scroll in any direction, and so do
- * the strips at the edges: up and down on the right, sideways along the bottom. A phone without a
+ * pointing pauses by itself when the phone is put down. A finger dragged on the pad scrolls, since
+ * the pointer needs no finger. With it off the pad is a laptop-style
+ * mouse pad: slide to move, tap to click, and two fingers or the strips at the edges scroll in any
+ * direction (up and down on the right, sideways along the bottom). A phone without a
  * gyroscope has no Air pointing key and is always a mouse pad.
  *
  * There is no Click key. The click belongs where the hand already is: a tap, or the volume button
@@ -195,7 +196,7 @@ private fun BoxScope.PointingSurface(settings: AirMouseSettings, hasGyroscope: B
             .fillMaxSize()
             .semantics {
                 contentDescription = if (airPointing) {
-                    "Air mouse pad. Move the phone to move the pointer on the TV. Double-tap to click."
+                    "Air mouse pad. Move the phone to move the pointer on the TV. Double-tap to click. Drag a finger to scroll."
                 } else {
                     "Mouse pad. Slide a finger to move the pointer on the TV. Double-tap to click."
                 }
@@ -232,11 +233,11 @@ private fun BoxScope.PointingSurface(settings: AirMouseSettings, hasGyroscope: B
                             // lifted, or the finger that lifts last would drag the pointer along
                             if (fingers.size >= 2) scrolling = true
                             if (scrolling) {
-                                // Like a touch screen: the page follows the fingers, so fingers moving down turn
-                                // the wheel up and fingers moving right scroll left
+                                // As on the touchpad: fingers moving down scroll down (the Down key) and fingers
+                                // moving right scroll right, so the two modes feel the same
                                 if (fingers.size >= 2) {
                                     val notchPx = SCROLL_DP_PER_NOTCH.dp.toPx()
-                                    currentActions.onScroll(-delta.x / notchPx, delta.y / notchPx)
+                                    currentActions.onScroll(delta.x / notchPx, -delta.y / notchPx)
                                 }
                             } else {
                                 travelled += delta
@@ -244,6 +245,11 @@ private fun BoxScope.PointingSurface(settings: AirMouseSettings, hasGyroscope: B
                                 // a tap or a hold, and its wobble must not reach the TV
                                 if (!sliding && travelled.getDistance() > slop) sliding = true
                                 if (sliding && !airPointing) currentActions.onSlide(delta.x.toDp().value, delta.y.toDp().value, dt)
+                                // The pointer follows the phone, so a thumb drag is free to scroll, in the touchpad's directions
+                                if (sliding && airPointing) {
+                                    val notchPx = SCROLL_DP_PER_NOTCH.dp.toPx()
+                                    currentActions.onScroll(delta.x / notchPx, -delta.y / notchPx)
+                                }
                             }
                             event.changes.forEach { it.consume() }
                         }
@@ -268,7 +274,7 @@ private fun BoxScope.PointingSurface(settings: AirMouseSettings, hasGyroscope: B
         ) {
             if (airPointing) {
                 Text(
-                    "Move the phone to point · tap to click · two fingers to scroll in any direction",
+                    "Move the phone to point · tap to click · drag to scroll in any direction",
                     style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.Medium),
                     textAlign = TextAlign.Center
                 )
@@ -290,17 +296,21 @@ private fun BoxScope.PointingSurface(settings: AirMouseSettings, hasGyroscope: B
         }
     }
     val volumeHint = volumeHint(settings).takeIf { airPointing }
-    // The strips sit in the same place whatever the pad is doing: up and down on the right, sideways along the bottom
-    ScrollStrip(
-        horizontal = false,
-        onScroll = { currentActions.onScroll(0f, it) },
-        modifier = Modifier.align(Alignment.CenterEnd).padding(end = 12.dp, top = 56.dp, bottom = 56.dp)
-    )
-    ScrollStrip(
-        horizontal = true,
-        onScroll = { currentActions.onScroll(it, 0f) },
-        modifier = Modifier.align(Alignment.BottomStart).padding(start = 12.dp, end = 56.dp, bottom = 12.dp)
-    )
+    // With air pointing on, one finger scrolls anywhere on the pad, so there are no strips to aim for.
+    // As a mouse pad a finger moves the pointer, so scrolling has two fingers or the strips: up and
+    // down on the right, sideways along the bottom
+    if (!airPointing) {
+        ScrollStrip(
+            horizontal = false,
+            onScroll = { currentActions.onScroll(0f, it) },
+            modifier = Modifier.align(Alignment.CenterEnd).padding(end = 12.dp, top = 56.dp, bottom = 56.dp)
+        )
+        ScrollStrip(
+            horizontal = true,
+            onScroll = { currentActions.onScroll(it, 0f) },
+            modifier = Modifier.align(Alignment.BottomStart).padding(start = 12.dp, end = 56.dp, bottom = 12.dp)
+        )
+    }
     if (volumeHint != null) {
         Row(
             modifier = Modifier
