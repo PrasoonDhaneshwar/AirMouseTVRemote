@@ -189,17 +189,25 @@ class AirMouseSession private constructor(
      * Brings the pointer up for the TV known by [tvKeys] (see [tvLinkKeys]): connects to it if it has
      * been set up, or looks for it over Bluetooth under the names people see, [tvNames], and waits for
      * it to pair if not. Returns false, having done nothing, if the Bluetooth permission is missing.
+     * The link stays up until [stop]; the sensors run only while [sensing], since the gyroscope is what
+     * costs battery and nothing is pointed while another mode is showing. Calling this again just
+     * changes [sensing].
      * Call from the main thread.
      */
-    fun start(tvKeys: List<String>, tvNames: List<String>): Boolean {
+    fun start(tvKeys: List<String>, tvNames: List<String>, sensing: Boolean = true): Boolean {
         this.tvKeys = tvKeys
         val address = links.addressFor(tvKeys)
         // Found under one of its names: saved under the rest too, so it is found by the name it goes by next time
         if (address != null) links.save(tvKeys, address)
         if (!hidSink.start(address, tvNames)) return false
-        sensors.start { sample ->
-            calibration?.add(sample.angular)
-            pipeline.onMotion(sample)?.let(::send)
+        if (sensing) {
+            sensors.start { sample ->
+                calibration?.add(sample.angular)
+                pipeline.onMotion(sample)?.let(::send)
+            }
+        } else {
+            sensors.stop()
+            pipeline.reset()
         }
         return true
     }

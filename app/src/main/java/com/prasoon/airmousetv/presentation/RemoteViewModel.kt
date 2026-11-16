@@ -45,11 +45,20 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.coroutines.launch
 import javax.inject.Inject
 
 private const val TAG = "RemoteViewModel"
+
+/**
+ * How long the Bluetooth link to the TV outlives the app going to the background. A trip to another
+ * app and back inside this time finds the pointer already connected; after it the mouse role is
+ * given back, since Android may hand it to another app and the link costs battery for nobody.
+ */
+private const val AIR_LINK_GRACE_MS = 60_000L
 /** How long a scan shows as "scanning" before it settles into found / nothing found. */
 private const val SCAN_WINDOW_MS = 8000L
 
@@ -143,6 +152,12 @@ class RemoteViewModel @Inject constructor(
 
     /** True from the moment the user starts the air mouse setup until it is closed or finished. */
     private var airSetupBegun = false
+
+    /** True for [AIR_LINK_GRACE_MS] after the app goes to the background, so a quick trip elsewhere keeps the Bluetooth link. */
+    private var inGrace = false
+
+    /** Lets go of the Bluetooth link once the grace period has run out; replaced when the app returns or goes away again. */
+    private var graceJob: Job? = null
 
     /** False while the app is in the background, where Android takes the Bluetooth mouse role away anyway. */
     private var inForeground = false
@@ -774,6 +789,10 @@ class RemoteViewModel @Inject constructor(
         viewModelScope.launch {
             airMouse.search.collect { search -> updateAirMouse { it.copy(search = search) } }
         }
+        // The link comes up when the remote connects to a TV that has been set up, and goes with it
+        viewModelScope.launch {
+            _uiState.map { (it.mode as? RemoteMode.Connected)?.tv?.airMouseKeys }.distinctUntilChanged().collect { syncAirMouse() }
+        }
     }
 
     /** Starts pairing with the device at [address], one the setup's search found and the user picked as their TV. */
@@ -784,7 +803,8 @@ class RemoteViewModel @Inject constructor(
     }
 
     /**
-     * Holds the Bluetooth mouse role exactly while something on screen needs it: the pad, or a
+     * Holds the Bluetooth mouse role while the app is in front (and for a minute after), once the TV
+     * has been set up, or while something on screen needs it: the pad, or a
      * setup that has been started. Without the Bluetooth permission nothing starts and the link
      * stays idle, which the pad shows as "allow Bluetooth".
      *
@@ -795,17 +815,38 @@ class RemoteViewModel @Inject constructor(
      */
     private fun syncAirMouse() {
         val tv = (_uiState.value.mode as? RemoteMode.Connected)?.tv
-        if (tv != null && (airSetupBegun || (inForeground && airPadShowing))) {
+        // A TV that has been set up, on a phone that can do it, gets its link as soon as the remote
+        // connects, so opening the pad (or coming back to it from the D-pad) doesn't wait for Bluetooth
+        val ready = tv != null && airMouse.hasMouseRole == true && airMouse.isLinked(tv.airMouseKeys)
+        val visible = inForeground || inGrace
+        if (tv != null && (airSetupBegun || (visible && (airPadShowing || ready)))) {
             // The TV goes by the same name over Bluetooth on most models, which is how the search knows it
-            airMouse.start(tv.airMouseKeys, listOfNotNull(tv.friendlyName, tv.displayName, tv.name).distinct())
+            // The sensors, which cost the battery, run only while the pad is there to be pointed with
+            airMouse.start(
+                tv.airMouseKeys, listOfNotNull(tv.friendlyName, tv.displayName, tv.name).distinct(),
+                sensing = inForeground && airPadShowing
+            )
         } else {
             airMouse.stop()
         }
     }
 
-    /** Tells the air mouse whether the app is in front. In the background the pointer is let go. */
+    /**
+     * Tells the air mouse whether the app is in front. The Bluetooth link outlives a short trip to
+     * another app, [AIR_LINK_GRACE_MS], and is let go after that: Android may hand the mouse role to
+     * another app meanwhile, and nothing is gained by holding it for an app nobody is looking at.
+     */
     fun setAirMouseForeground(foreground: Boolean) {
         inForeground = foreground
+        graceJob?.cancel()
+        inGrace = !foreground
+        if (!foreground) {
+            graceJob = viewModelScope.launch {
+                delay(AIR_LINK_GRACE_MS)
+                inGrace = false
+                syncAirMouse()
+            }
+        }
         // Android may have taken the role away while the app was behind; coming back is the time to ask again
         if (foreground && airMouse.state.value == PointerLinkState.BLOCKED) airMouse.stop()
         syncAirMouse()
