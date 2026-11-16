@@ -2,7 +2,6 @@ package com.prasoon.airmousetv.ui.screens
 
 import android.provider.Settings
 import android.view.HapticFeedbackConstants
-import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.LinearEasing
 import androidx.compose.animation.core.RepeatMode
 import androidx.compose.animation.core.StartOffset
@@ -26,7 +25,9 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.IntrinsicSize
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -53,12 +54,12 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
@@ -103,8 +104,8 @@ import kotlin.math.abs
 private const val SCROLL_DP_PER_NOTCH = 24f
 
 /**
- * The longest a touch can last and still be a tap. Longer than that with air pointing on, and the
- * finger is holding the pointer still to re-aim, which must not end in a click.
+ * The longest a touch can last and still be a tap. A finger resting longer than that is not asking
+ * for a click.
  */
 private const val TAP_MAX_MS = 250L
 
@@ -129,7 +130,7 @@ internal class AirPadActions(
     /** Scroll by this many notches sideways (right positive) and of the wheel (up positive). */
     val onScroll: (dx: Float, dy: Float) -> Unit = { _, _ -> },
     val onRecenter: () -> Unit = {},
-    /** The Air pointing switch was turned on or off. */
+    /** The Air pointing key was turned on or off. */
     val onAirPointing: (Boolean) -> Unit = {},
     val onAllowBluetooth: () -> Unit = {},
     val onTurnOnBluetooth: () -> Unit = {},
@@ -139,13 +140,14 @@ internal class AirPadActions(
 )
 
 /**
- * The air mouse: one pad, with Recenter underneath.
+ * The air mouse: one pad, with the Air pointing key and Recenter underneath.
  *
  * With Air pointing on, the TV's pointer follows the phone and no finger has to be on the screen.
- * A tap clicks; a finger held down freezes the pointer, so the phone can be brought back to a
- * comfortable position; pointing pauses by itself when the phone is put down. With the switch off
- * the pad is a laptop-style mouse pad: slide to move, tap to click. In both, two fingers or the
- * strip at the edge scroll. A phone without a gyroscope has no switch and is always a mouse pad.
+ * A tap clicks, and the pointer holds still while a finger is down, since landing jolts the phone;
+ * pointing pauses by itself when the phone is put down. With it off the pad is a laptop-style
+ * mouse pad: slide to move, tap to click. In both, two fingers scroll in any direction, and so do
+ * the strips at the edges: up and down on the right, sideways along the bottom. A phone without a
+ * gyroscope has no Air pointing key and is always a mouse pad.
  *
  * There is no Click key. The click belongs where the hand already is: a tap, or the volume button
  * under a finger. Back stays on the remote's Back key.
@@ -171,17 +173,22 @@ internal fun AirMousePad(air: AirMouseUiState, tvName: String, actions: AirPadAc
                 else -> LinkNotice(air.link, actions)
             }
         }
-        RecenterKey(enabled = ready, onClick = actions.onRecenter)
+        // Below the pad, not on it, so a tap on the pad can never flip the switch
+        Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+            if (air.hasGyroscope) {
+                AirPointingKey(on = air.settings.airPointing, enabled = ready, onChange = actions.onAirPointing)
+            }
+            RecenterKey(enabled = ready, onClick = actions.onRecenter, modifier = Modifier.weight(1f))
+        }
     }
 }
 
-/** The working surface: takes the taps, holds and slides, and carries the switch, the scroll strip and the volume hint. */
+/** The working surface: takes the taps and slides, and carries the scroll strips and the volume hint. */
 @Composable
 private fun BoxScope.PointingSurface(settings: AirMouseSettings, hasGyroscope: Boolean, actions: AirPadActions) {
     val currentActions by rememberUpdatedState(actions)
     val view = LocalView.current
     val airPointing = settings.airPointing && hasGyroscope
-    var holding by remember { mutableStateOf(false) }
 
     Box(
         modifier = Modifier
@@ -206,7 +213,6 @@ private fun BoxScope.PointingSurface(settings: AirMouseSettings, hasGyroscope: B
                     var sliding = false
                     var scrolling = false
                     var lastMs = down.uptimeMillis
-                    holding = true
                     // Before anything else: the finger landing has already jolted the phone
                     if (airPointing) currentActions.onPress(true)
                     try {
@@ -249,7 +255,6 @@ private fun BoxScope.PointingSurface(settings: AirMouseSettings, hasGyroscope: B
                     } finally {
                         // Also runs when the gesture is cancelled (the link dropped, the screen went away):
                         // the pointer must never be left frozen by a finger that is no longer there
-                        holding = false
                         if (airPointing) currentActions.onPress(false)
                     }
                 }
@@ -259,31 +264,22 @@ private fun BoxScope.PointingSurface(settings: AirMouseSettings, hasGyroscope: B
         Column(
             modifier = Modifier.padding(horizontal = 52.dp),
             horizontalAlignment = Alignment.CenterHorizontally,
-            verticalArrangement = Arrangement.spacedBy(8.dp)
+            verticalArrangement = Arrangement.spacedBy(10.dp)
         ) {
             if (airPointing) {
-                val frozen = holding
-                PointerRing(frozen)
                 Text(
-                    if (frozen) "Holding the pointer still" else "Move the phone, the pointer follows",
+                    "Move the phone to point · tap to click · two fingers to scroll in any direction",
                     style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.Medium),
                     textAlign = TextAlign.Center
                 )
                 Text(
-                    if (frozen) "Lift your finger to point again" else "Tap to click · two fingers to scroll in any direction",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    textAlign = TextAlign.Center
-                )
-                // Always laid out, so the ring doesn't jump while a finger is down
-                Text(
                     "Pauses when the phone is put down",
                     style = MaterialTheme.typography.bodySmall.copy(fontSize = 11.sp),
-                    color = if (frozen) Color.Transparent else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
+                    color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
                     textAlign = TextAlign.Center
                 )
             } else {
-                Text("Slide to move the pointer", style = MaterialTheme.typography.bodyMedium, textAlign = TextAlign.Center)
+                Text("Slide to move the pointer", style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.Medium), textAlign = TextAlign.Center)
                 Text(
                     "Tap to click · two fingers to scroll in any direction",
                     style = MaterialTheme.typography.bodySmall,
@@ -292,13 +288,6 @@ private fun BoxScope.PointingSurface(settings: AirMouseSettings, hasGyroscope: B
                 )
             }
         }
-    }
-    if (hasGyroscope) {
-        AirPointingSwitch(
-            on = settings.airPointing,
-            onChange = { currentActions.onAirPointing(it) },
-            modifier = Modifier.align(Alignment.TopStart).padding(12.dp)
-        )
     }
     val volumeHint = volumeHint(settings).takeIf { airPointing }
     // The strips sit in the same place whatever the pad is doing: up and down on the right, sideways along the bottom
@@ -315,8 +304,8 @@ private fun BoxScope.PointingSurface(settings: AirMouseSettings, hasGyroscope: B
     if (volumeHint != null) {
         Row(
             modifier = Modifier
-                .align(Alignment.BottomCenter)
-                .padding(bottom = 56.dp)
+                .align(Alignment.TopCenter)
+                .padding(top = 12.dp)
                 .background(SheetSurface, CircleShape)
                 .padding(horizontal = 12.dp, vertical = 6.dp),
             verticalAlignment = Alignment.CenterVertically,
@@ -338,50 +327,67 @@ private fun volumeHint(settings: AirMouseSettings): String? = when (settings.vol
     VolumeButtons.TV_VOLUME -> null
 }
 
-/** The pointer in a ring: an outline while the pointer follows the phone, filled while a finger holds it still. */
-@Composable
-private fun PointerRing(frozen: Boolean) {
-    val teal = MaterialTheme.colorScheme.primary
-    val fill by animateColorAsState(teal.copy(alpha = if (frozen) 0.16f else 0f), tween(120), label = "ring")
-    Box(
-        modifier = Modifier
-            .size(132.dp)
-            .drawBehind {
-                val stroke = 2.dp.toPx()
-                drawCircle(teal.copy(alpha = 0.06f), radius = size.minDimension / 2 + 14.dp.toPx())
-                drawCircle(fill)
-                drawCircle(teal.copy(alpha = if (frozen) 1f else 0.5f), radius = (size.minDimension - stroke) / 2, style = Stroke(stroke))
-            },
-        contentAlignment = Alignment.Center
-    ) {
-        Icon(Icons.Default.NearMe, contentDescription = null, tint = teal, modifier = Modifier.size(38.dp).graphicsLayer { rotationZ = -90f })
-    }
-}
+/** Set once the line explaining the Air pointing key has been closed or the key used, so it never shows again. */
+private const val PREF_AIR_POINTING_HINT_SEEN = "air_pointing_hint_seen"
 
 /**
- * The switch between pointing with the phone and using the pad as a mouse pad. It sits on the pad
- * because it is flipped mid-use: pointing from the sofa, a mouse pad with the phone on the armrest.
+ * The switch between pointing with the phone and using the pad as a mouse pad, as a square key
+ * beside Recenter: teal while the phone points, grey while the pad is a mouse pad. It has no label,
+ * so the first time it is shown a short line says what it does; after that it is the icon alone.
  */
 @Composable
-private fun AirPointingSwitch(on: Boolean, onChange: (Boolean) -> Unit, modifier: Modifier = Modifier) {
+private fun AirPointingKey(on: Boolean, enabled: Boolean, onChange: (Boolean) -> Unit) {
+    val context = LocalContext.current
+    val prefs = remember { context.getSharedPreferences("remote_ui", android.content.Context.MODE_PRIVATE) }
+    var hintSeen by rememberSaveable { mutableStateOf(prefs.getBoolean(PREF_AIR_POINTING_HINT_SEEN, false)) }
+    fun markSeen() {
+        hintSeen = true
+        prefs.edit().putBoolean(PREF_AIR_POINTING_HINT_SEEN, true).apply()
+    }
+    val interaction = remember { MutableInteractionSource() }
+    val pressed by interaction.collectIsPressedAsState()
     val teal = MaterialTheme.colorScheme.primary
-    val track by animateColorAsState(if (on) teal else SurfaceHigh, tween(120), label = "switch")
-    Row(
-        modifier = modifier
-            .clip(CircleShape)
-            .background(SheetSurface)
-            .toggleable(value = on, role = Role.Switch, onValueChange = onChange)
-            .padding(start = 4.dp, top = 4.dp, bottom = 4.dp, end = 12.dp),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(10.dp)
-    ) {
-        Box(
-            Modifier.size(44.dp, 26.dp).background(track, CircleShape).padding(3.dp),
-            contentAlignment = if (on) Alignment.CenterEnd else Alignment.CenterStart
+    Box {
+        KeySurface(
+            enabled = enabled,
+            pressed = pressed,
+            held = false,
+            shape = RoundedCornerShape(18.dp),
+            container = if (on) teal else MaterialTheme.colorScheme.surfaceVariant,
+            border = null,
+            modifier = Modifier
+                .size(58.dp)
+                .semantics { contentDescription = "Air pointing" }
+                .toggleable(
+                    value = on, interactionSource = interaction, indication = null, enabled = enabled, role = Role.Switch,
+                    onValueChange = { markSeen(); onChange(it) }
+                )
         ) {
-            Box(Modifier.size(20.dp).background(if (on) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurfaceVariant, CircleShape))
+            Icon(
+                Icons.Default.NearMe, contentDescription = null,
+                tint = if (on) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.size(26.dp).graphicsLayer { rotationZ = -90f }
+            )
         }
-        Text("Air pointing", style = MaterialTheme.typography.bodySmall.copy(fontWeight = FontWeight.Medium))
+        if (!hintSeen && enabled) {
+            Row(
+                modifier = Modifier
+                    .align(Alignment.TopStart)
+                    .offset(y = (-58).dp)
+                    .background(SheetSurface, RoundedCornerShape(12.dp))
+                    .border(1.dp, SurfaceHigh, RoundedCornerShape(12.dp))
+                    .clickable { markSeen() }
+                    .padding(start = 12.dp, top = 8.dp, bottom = 8.dp, end = 12.dp)
+                    .width(IntrinsicSize.Max),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(
+                    if (on) "Air pointing is on. Tap to use the pad as a mouse." else "Air pointing is off. Tap to point with the phone.",
+                    style = MaterialTheme.typography.bodySmall,
+                    modifier = Modifier.width(210.dp)
+                )
+            }
+        }
     }
 }
 
@@ -457,7 +463,7 @@ private fun ScrollStrip(horizontal: Boolean, onScroll: (Float) -> Unit, modifier
  * told "move by this much", so the pointer is pushed into a corner and walked back from there.
  */
 @Composable
-private fun RecenterKey(enabled: Boolean, onClick: () -> Unit) {
+private fun RecenterKey(enabled: Boolean, onClick: () -> Unit, modifier: Modifier = Modifier) {
     val interaction = remember { MutableInteractionSource() }
     val pressed by interaction.collectIsPressedAsState()
     KeySurface(
@@ -468,7 +474,7 @@ private fun RecenterKey(enabled: Boolean, onClick: () -> Unit) {
         container = MaterialTheme.colorScheme.surfaceVariant,
         border = null,
         // The key draws its own pressed look, so the ripple would only double it
-        modifier = Modifier.fillMaxWidth().height(58.dp).clickable(interaction, indication = null, enabled = enabled, onClick = onClick)
+        modifier = modifier.height(58.dp).clickable(interaction, indication = null, enabled = enabled, onClick = onClick)
     ) {
         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
             Icon(Icons.Default.MyLocation, contentDescription = null, modifier = Modifier.size(20.dp))
