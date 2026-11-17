@@ -495,7 +495,7 @@ private fun HoldTip(onDismiss: () -> Unit) {
             .padding(start = 16.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
-        Text("Hold a key to repeat it.", style = MaterialTheme.typography.bodyMedium, modifier = Modifier.weight(1f))
+        Text("Hold a key to repeat it. Hold OK or Power for menus.", style = MaterialTheme.typography.bodyMedium, modifier = Modifier.weight(1f))
         IconButton(onClick = onDismiss) {
             Icon(
                 Icons.Default.Close, contentDescription = "Dismiss tip",
@@ -783,8 +783,8 @@ private fun RemoteContent(
                             PadMode.DPAD -> DPad(onKey, enabled, size = dpadSize)
                             PadMode.TOUCHPAD -> Touchpad(onKey, enabled, Modifier.fillMaxSize())
                             // Not dimmed with the keys while the Wi-Fi session reconnects: the pointer
-                            // travels over Bluetooth and keeps working
-                            PadMode.AIR_MOUSE -> AirMousePad(airMouse, tvName, airPadActions, Modifier.fillMaxSize())
+                            // travels over Bluetooth and keeps working. It is told, so it doesn't promise working keys
+                            PadMode.AIR_MOUSE -> AirMousePad(airMouse, tvName, airPadActions, Modifier.fillMaxSize(), wifiUp = !reconnecting)
                         }
                     }
                 }
@@ -1267,9 +1267,29 @@ private fun Touchpad(onKey: (TvKey, KeyAction) -> Unit, enabled: Boolean, modifi
             }
             .pointerInput(enabled) {
                 if (!enabled) return@pointerInput
-                detectTapGestures(onTap = {
-                    view.performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP)
-                    currentOnKey(TvKey.OK, KeyAction.TAP)
+                // Same rule as RemoteKey: a short touch is OK, held past HOLD_THRESHOLD_MS it is a long OK
+                // (the TV's context menu). A swipe cancels the press, so moving never sends either.
+                detectTapGestures(onPress = {
+                    var held = false
+                    try {
+                        val released = withTimeoutOrNull(HOLD_THRESHOLD_MS) { tryAwaitRelease() }
+                        when (released) {
+                            true -> {
+                                view.performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP)
+                                currentOnKey(TvKey.OK, KeyAction.TAP)
+                            }
+                            null -> {
+                                view.performHapticFeedback(HapticFeedbackConstants.LONG_PRESS)
+                                currentOnKey(TvKey.OK, KeyAction.LONG_START)
+                                held = true
+                                tryAwaitRelease()
+                            }
+                            false -> Unit
+                        }
+                    } finally {
+                        // Also runs if cancelled mid-hold, so the TV never keeps OK held down
+                        if (held) currentOnKey(TvKey.OK, KeyAction.LONG_END)
+                    }
                 })
             }
             .pointerInput(enabled) {
@@ -1302,9 +1322,12 @@ private fun Touchpad(onKey: (TvKey, KeyAction) -> Unit, enabled: Boolean, modifi
         EdgeArrow(Icons.AutoMirrored.Filled.KeyboardArrowLeft, lit == TvKey.LEFT, Modifier.align(Alignment.CenterStart))
         EdgeArrow(Icons.AutoMirrored.Filled.KeyboardArrowRight, lit == TvKey.RIGHT, Modifier.align(Alignment.CenterEnd))
         Text(
-            "Swipe to move · tap for OK",
+            "Swipe to move · tap for OK\nHold OK for options",
             color = MaterialTheme.colorScheme.onSurfaceVariant,
-            style = MaterialTheme.typography.bodyMedium
+            style = MaterialTheme.typography.bodyMedium,
+            textAlign = TextAlign.Center,
+            // Clear of the edge arrows, which sit 12dp in and 28dp wide
+            modifier = Modifier.padding(horizontal = 52.dp)
         )
     }
 }

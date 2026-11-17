@@ -1,5 +1,6 @@
 package com.prasoon.airmousetv.ui.screens
 
+import android.os.SystemClock
 import android.provider.Settings
 import android.view.HapticFeedbackConstants
 import androidx.compose.animation.core.LinearEasing
@@ -96,7 +97,6 @@ import com.prasoon.airmousetv.airmouse.model.PointerButton
 import com.prasoon.airmousetv.airmouse.model.PointerLinkState
 import com.prasoon.airmousetv.airmouse.model.VolumeButtons
 import com.prasoon.airmousetv.ui.theme.AirMouseTVRemoteTheme
-import com.prasoon.airmousetv.ui.theme.Amber
 import com.prasoon.airmousetv.ui.theme.Faint
 import com.prasoon.airmousetv.ui.theme.Hairline
 import com.prasoon.airmousetv.ui.theme.PadSurface
@@ -104,6 +104,7 @@ import com.prasoon.airmousetv.ui.theme.ScreenBlack
 import com.prasoon.airmousetv.ui.theme.SheetSurface
 import com.prasoon.airmousetv.ui.theme.SurfaceHigh
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.withTimeoutOrNull
 import kotlin.math.abs
 
 /** Distance dragged, in dp, that turns the TV's wheel by one notch: about a finger's width, like a notch on a real wheel. */
@@ -116,9 +117,16 @@ private const val SCROLL_DP_PER_NOTCH = 24f
 private const val TAP_MAX_MS = 250L
 
 /**
+ * How long a finger must rest on the pad before it counts as a long press and the mouse button goes
+ * down, the same as holding a key on the remote. Between [TAP_MAX_MS] and this, a touch does nothing.
+ */
+private const val HOLD_MS = 400L
+
+/**
  * How long a linked TV gets to reconnect before the pad offers to set it up again. A TV that is on
  * and in range connects within a few seconds; one that is off never will, and the user doesn't need
- * a button for that. The offer is for the rare TV that has forgotten the phone.
+ * a button for that. The offer is for the rare TV that has forgotten the phone, so it is only made
+ * while the TV still answers over Wi-Fi: a TV that answers neither way is off, not forgetful.
  */
 private const val SET_UP_AGAIN_AFTER_MS = 30_000L
 
@@ -160,11 +168,17 @@ internal class AirPadActions(
  * under a finger. Back stays on the remote's Back key.
  *
  * Before the TV has been set up for it, the pad's place is taken by the offer to do that. While the
- * Bluetooth link is down it says what is missing; the keys around it keep working, since they
- * travel over Wi-Fi.
+ * Bluetooth link is down it says what is missing. The keys around it travel over Wi-Fi, so the pad
+ * only says they still work when [wifiUp]: with both links down the keys are dimmed too.
  */
 @Composable
-internal fun AirMousePad(air: AirMouseUiState, tvName: String, actions: AirPadActions, modifier: Modifier = Modifier) {
+internal fun AirMousePad(
+    air: AirMouseUiState,
+    tvName: String,
+    actions: AirPadActions,
+    modifier: Modifier = Modifier,
+    wifiUp: Boolean = true
+) {
     val shape = MaterialTheme.shapes.extraLarge
     val surface = Modifier.fillMaxWidth().clip(shape).background(PadSurface).border(1.dp, SurfaceHigh, shape)
     if (!air.linked) {
@@ -176,8 +190,8 @@ internal fun AirMousePad(air: AirMouseUiState, tvName: String, actions: AirPadAc
         Box(Modifier.weight(1f).then(surface)) {
             when (air.link) {
                 PointerLinkState.READY -> PointingSurface(air.settings, air.hasGyroscope, actions)
-                PointerLinkState.CONNECTING -> Reconnecting(tvName, actions.onSetUpAgain)
-                else -> LinkNotice(air.link, actions)
+                PointerLinkState.CONNECTING -> Reconnecting(tvName, wifiUp, actions.onSetUpAgain)
+                else -> LinkNotice(air.link, wifiUp, actions)
             }
         }
         // Below the pad, not on it, so a tap on the pad can never flip the switch
@@ -216,9 +230,9 @@ private fun BoxScope.PointingSurface(settings: AirMouseSettings, hasGyroscope: B
             )
             .semantics {
                 contentDescription = if (airPointing) {
-                    "Air mouse pad. Move the phone to move the pointer on the TV. Double-tap to click. Drag a finger to scroll."
+                    "Air mouse pad. Move the phone to move the pointer on the TV. Double-tap to click. Double-tap and hold for a long press. Drag a finger to scroll."
                 } else {
-                    "Mouse pad. Slide a finger to move the pointer on the TV. Double-tap to click."
+                    "Mouse pad. Slide a finger to move the pointer on the TV. Double-tap to click. Double-tap and hold for a long press."
                 }
                 onClick {
                     currentActions.onButton(PointerButton.PRIMARY, true)
@@ -233,12 +247,31 @@ private fun BoxScope.PointingSurface(settings: AirMouseSettings, hasGyroscope: B
                     var travelled = Offset.Zero
                     var sliding = false
                     var scrolling = false
+                    // True while the mouse button is held down for a long press, until the finger lifts
+                    var held = false
                     var lastMs = down.uptimeMillis
                     // Before anything else: the finger landing has already jolted the phone
                     if (airPointing) currentActions.onPress(true)
                     try {
                         while (true) {
-                            val event = awaitPointerEvent()
+                            // Until the finger moves, a second one lands or the hold begins, the wait for the
+                            // next event is capped at the time left to the hold
+                            val waiting = !held && !sliding && !scrolling
+                            val event = if (waiting) {
+                                withTimeoutOrNull((HOLD_MS - (SystemClock.uptimeMillis() - down.uptimeMillis)).coerceAtLeast(1L)) {
+                                    awaitPointerEvent()
+                                }
+                            } else {
+                                awaitPointerEvent()
+                            }
+                            if (event == null) {
+                                // Still down and still: press the button and keep it down, as a mouse does for a
+                                // long click (a context menu on the TV). Moving afterwards drags.
+                                held = true
+                                view.performHapticFeedback(HapticFeedbackConstants.LONG_PRESS)
+                                currentActions.onButton(PointerButton.PRIMARY, true)
+                                continue
+                            }
                             val fingers = event.changes.filter { it.pressed }
                             if (fingers.isEmpty()) break
                             // Fingers that only just landed have no movement yet, and would halve the average
@@ -266,21 +299,24 @@ private fun BoxScope.PointingSurface(settings: AirMouseSettings, hasGyroscope: B
                                 if (!sliding && travelled.getDistance() > slop) sliding = true
                                 if (sliding && !airPointing) currentActions.onSlide(delta.x.toDp().value, delta.y.toDp().value, dt)
                                 // The pointer follows the phone, so a thumb drag is free to scroll, in the touchpad's directions
-                                if (sliding && airPointing) {
+                                // (not while the button is held: the pointer is following the phone and the finger just rests)
+                                if (sliding && airPointing && !held) {
                                     val notchPx = SCROLL_DP_PER_NOTCH.dp.toPx()
                                     currentActions.onScroll(delta.x / notchPx, -delta.y / notchPx)
                                 }
                             }
                             event.changes.forEach { it.consume() }
                         }
-                        if (!sliding && !scrolling && lastMs - down.uptimeMillis <= TAP_MAX_MS) {
+                        if (!held && !sliding && !scrolling && lastMs - down.uptimeMillis <= TAP_MAX_MS) {
                             view.performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP)
                             currentActions.onButton(PointerButton.PRIMARY, true)
                             currentActions.onButton(PointerButton.PRIMARY, false)
                         }
                     } finally {
                         // Also runs when the gesture is cancelled (the link dropped, the screen went away):
-                        // the pointer must never be left frozen by a finger that is no longer there
+                        // the pointer must never be left frozen by a finger that is no longer there,
+                        // nor the button left down
+                        if (held) currentActions.onButton(PointerButton.PRIMARY, false)
                         if (airPointing) currentActions.onPress(false)
                     }
                 }
@@ -356,7 +392,7 @@ private fun BoxScope.PadHint(airPointing: Boolean, faded: Boolean) {
     val muted = MaterialTheme.colorScheme.onSurfaceVariant
     if (faded) {
         Text(
-            "Tap to click · swipe to scroll",
+            "Tap to click · hold for options · swipe to scroll",
             style = MaterialTheme.typography.bodySmall.copy(fontSize = 12.sp),
             color = muted.copy(alpha = 0.75f),
             textAlign = TextAlign.Center,
@@ -372,7 +408,7 @@ private fun BoxScope.PadHint(airPointing: Boolean, faded: Boolean) {
     ) {
         if (airPointing) {
             HintRow(Icons.Default.PhoneAndroid, "Move the phone to point")
-            HintRow(Icons.Default.TouchApp, "Tap to click")
+            HintRow(Icons.Default.TouchApp, "Tap to click, hold for options")
             HintRow(Icons.Default.OpenWith, "Swipe to scroll")
             Text(
                 "Pauses when the phone is put down",
@@ -382,7 +418,7 @@ private fun BoxScope.PadHint(airPointing: Boolean, faded: Boolean) {
             )
         } else {
             HintRow(Icons.Default.NearMe, "Slide to move")
-            HintRow(Icons.Default.TouchApp, "Tap to click")
+            HintRow(Icons.Default.TouchApp, "Tap to click, hold for options")
             HintRow(Icons.Default.UnfoldMore, "Two fingers or the strips to scroll")
         }
     }
@@ -572,10 +608,13 @@ private fun animationsOff(): Boolean {
 /**
  * A linked TV that isn't connected: it is off, out of range, or just slow. Nothing here is the
  * user's to fix by pairing again, so there is no button for that until the TV has stayed away for
- * [SET_UP_AGAIN_AFTER_MS], and then only a quiet one.
+ * [SET_UP_AGAIN_AFTER_MS] while still answering over Wi-Fi, and then only a quiet one.
+ *
+ * The headline already says it is reconnecting, so there is no status line in the corner: it only
+ * repeated the headline, and collided with the offer once that appeared.
  */
 @Composable
-private fun BoxScope.Reconnecting(tvName: String, onSetUpAgain: () -> Unit) {
+private fun BoxScope.Reconnecting(tvName: String, wifiUp: Boolean, onSetUpAgain: () -> Unit) {
     var waitedLong by remember { mutableStateOf(false) }
     LaunchedEffect(Unit) {
         delay(SET_UP_AGAIN_AFTER_MS)
@@ -589,12 +628,17 @@ private fun BoxScope.Reconnecting(tvName: String, onSetUpAgain: () -> Unit) {
         Waves()
         Text("Reconnecting to $tvName…", style = MaterialTheme.typography.titleMedium, textAlign = TextAlign.Center)
         Text(
-            "Move closer to the TV, or check it's on. The keys below still work over Wi-Fi.",
+            if (wifiUp) {
+                "Move closer to the TV, or check it's on. The keys below still work over Wi-Fi."
+            } else {
+                // The Wi-Fi session is down as well, and the keys below are dimmed: the TV is most likely off
+                "The TV isn't answering over Bluetooth or Wi-Fi. Check it's on."
+            },
             style = MaterialTheme.typography.bodyMedium.copy(fontSize = 13.sp),
             color = MaterialTheme.colorScheme.onSurfaceVariant,
             textAlign = TextAlign.Center
         )
-        if (waitedLong) {
+        if (waitedLong && wifiUp) {
             Text(
                 "Still not connecting?",
                 style = MaterialTheme.typography.bodySmall,
@@ -610,7 +654,6 @@ private fun BoxScope.Reconnecting(tvName: String, onSetUpAgain: () -> Unit) {
             }
         }
     }
-    LinkStatus(Amber, "Bluetooth reconnecting", Modifier.align(Alignment.BottomStart).padding(start = 16.dp, bottom = 12.dp))
 }
 
 /** Three rings spreading from a Bluetooth mark, one after another: something is being reached for. Still when animations are off. */
@@ -648,10 +691,10 @@ private fun Waves() {
 
 /** What stands in for the surface while the pointer can't be used for a reason the user can do something about. */
 @Composable
-private fun BoxScope.LinkNotice(link: PointerLinkState, actions: AirPadActions) {
+private fun BoxScope.LinkNotice(link: PointerLinkState, wifiUp: Boolean, actions: AirPadActions) {
     val (title, body) = when (link) {
         PointerLinkState.BLUETOOTH_OFF -> "Bluetooth is off" to
-            "The pointer travels over Bluetooth. The keys below still work over Wi-Fi."
+            if (wifiUp) "The pointer travels over Bluetooth. The keys below still work over Wi-Fi." else "The pointer travels over Bluetooth."
         PointerLinkState.BLOCKED -> "The pointer is in use elsewhere" to
             "Another app is using this phone as a Bluetooth mouse or keyboard. Close it, then come back."
         PointerLinkState.IDLE -> "Bluetooth isn't allowed" to
@@ -676,15 +719,6 @@ private fun BoxScope.LinkNotice(link: PointerLinkState, actions: AirPadActions) 
             PointerLinkState.BLOCKED -> Unit
             else -> TextButton(onClick = actions.onSetUpAgain) { Text("Set up again") }
         }
-    }
-}
-
-/** One line in the pad's corner saying how the Bluetooth link is doing. */
-@Composable
-private fun LinkStatus(dot: Color, text: String, modifier: Modifier = Modifier) {
-    Row(modifier, verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-        Box(Modifier.size(7.dp).background(dot, CircleShape))
-        Text(text, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
     }
 }
 
@@ -809,6 +843,17 @@ private fun AirNoGyroscopePreview() = PadPreview(previewAir.copy(hasGyroscope = 
 @Preview(showBackground = true, widthDp = 390, name = "Reconnecting")
 @Composable
 private fun AirReconnectingPreview() = PadPreview(previewAir.copy(link = PointerLinkState.CONNECTING))
+
+@Preview(showBackground = true, widthDp = 390, name = "Reconnecting, Wi-Fi down too")
+@Composable
+private fun AirReconnectingNoWifiPreview() = AirMouseTVRemoteTheme {
+    Box(Modifier.background(MaterialTheme.colorScheme.background).padding(20.dp)) {
+        AirMousePad(
+            previewAir.copy(link = PointerLinkState.CONNECTING), "Living Room TV", AirPadActions(),
+            Modifier.fillMaxWidth().height(420.dp), wifiUp = false
+        )
+    }
+}
 
 @Preview(showBackground = true, widthDp = 390, name = "Bluetooth off")
 @Composable
