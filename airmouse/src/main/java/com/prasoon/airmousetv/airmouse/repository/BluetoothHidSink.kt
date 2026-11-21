@@ -338,6 +338,7 @@ private class HidLink(
                     if (device == target) {
                         main.removeCallbacks(reconnect)
                         connected = true
+                        dropped.set(0)
                         note("Pointer link up")
                     }
                 }
@@ -575,15 +576,28 @@ private class HidLink(
 
     /** Sends one mouse report if the TV is connected. Safe from any thread. */
     fun send(report: ByteArray) {
-        val device = hid ?: return
-        val tv = target ?: return
-        if (!connected) return
+        val device = hid
+        val tv = target
+        if (device == null || tv == null || !connected) return noteDropped("no link")
         try {
-            device.sendReport(tv, HID_MOUSE_REPORT_ID, report)
+            if (!device.sendReport(tv, HID_MOUSE_REPORT_ID, report)) noteDropped("refused by Bluetooth")
         } catch (e: RuntimeException) {
             // The Bluetooth process can die under us; the link state will say so a moment later
             Log.w(TAG, "sendReport failed", e)
         }
+    }
+
+    /** Reports that never reached the TV since the link last came up; see [noteDropped]. */
+    private val dropped = java.util.concurrent.atomic.AtomicInteger()
+
+    /**
+     * Counts a report that didn't go out, and says so for the first and then every hundredth: a
+     * pointer that stops short (a recenter that ends a quarter of the way) is otherwise silent. A
+     * warning, so it also shows in release builds.
+     */
+    private fun noteDropped(reason: String) {
+        val total = dropped.incrementAndGet()
+        if (total == 1 || total % 100 == 0) Log.w(TAG, "Mouse report dropped ($reason); $total since the link came up")
     }
 
     fun close() {

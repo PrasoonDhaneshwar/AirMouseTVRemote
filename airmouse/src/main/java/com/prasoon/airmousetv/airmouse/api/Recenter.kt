@@ -14,18 +14,20 @@ internal const val RECENTER_SWEEP_STEP = 127f
 /**
  * The way back from the corner to about the middle, in mouse counts: half of a 1920 by 1080 screen at
  * the one pixel per count Android TV gives a mouse that moves slowly (measured on a Hisense Android
- * TV 9 with its pointer speed left at default).
+ * TV 9 with its pointer speed left at default). The numbers are about 11% under that half because at
+ * the step size below the TV still moves the pointer about 1.12 times too far, so 960 by 540 ended
+ * near (1080, 610).
  */
-internal const val RECENTER_TO_MIDDLE_X = 960f
-internal const val RECENTER_TO_MIDDLE_Y = 540f
+internal const val RECENTER_TO_MIDDLE_X = 850f
+internal const val RECENTER_TO_MIDDLE_Y = 480f
 
 /**
  * The size of one step of the way back. Small on purpose: the TV speeds the pointer up for fast mouse
- * movement, by an amount that changes from one run to the next. At 12 counts a step the same walk
- * ended anywhere from 1.5 to 1.75 times too far; at 4, sent every 10 ms, the TV adds nothing and the
- * pointer goes where the counts say.
+ * movement, by an amount that changes from one run to the next. Measured on the Hisense, the pointer
+ * ended about 1.55 times too far at 4 counts a step and about 1.3 times at 2; 3 is the compromise
+ * that keeps the walk to about 4 seconds instead of 7.
  */
-internal const val RECENTER_RETURN_STEP = 4f
+internal const val RECENTER_RETURN_STEP = 3f
 
 /**
  * The movements that bring the pointer to about the middle of the screen, wherever it is.
