@@ -1264,7 +1264,7 @@ private fun SheetPreview(content: @Composable () -> Unit) {
 private fun TextEntryOnTvPreview() = SheetPreview {
     TvInputSheetContent(
         "Search movies, shows, apps and more", "Living Room TV", TextFieldValue("stranger th"), {}, TvTextStatus.ON_TV,
-        Icons.AutoMirrored.Filled.ArrowForward, "Send to TV", ImeAction.Send, {}, true, FocusRequester()
+        Icons.AutoMirrored.Filled.ArrowForward, "Send to TV", ImeAction.Send, {}, true, remember { FocusRequester() }
     ) {}
 }
 
@@ -1273,7 +1273,7 @@ private fun TextEntryOnTvPreview() = SheetPreview {
 private fun TextEntryNotOnTvPreview() = SheetPreview {
     TvInputSheetContent(
         "Search", "Living Room TV", TextFieldValue("hello"), {}, TvTextStatus.NOT_ON_TV,
-        Icons.AutoMirrored.Filled.ArrowForward, "Send to TV", ImeAction.Send, {}, true, FocusRequester()
+        Icons.AutoMirrored.Filled.ArrowForward, "Send to TV", ImeAction.Send, {}, true, remember { FocusRequester() }
     ) { NotTakingText({}, {}) }
 }
 
@@ -1282,7 +1282,7 @@ private fun TextEntryNotOnTvPreview() = SheetPreview {
 private fun YouTubeSearchPreview() = SheetPreview {
     TvInputSheetContent(
         "Search YouTube", "Living Room TV", TextFieldValue("lofi beats"), {}, null,
-        Icons.Default.Search, "Search on TV", ImeAction.Search, {}, true, FocusRequester()
+        Icons.Default.Search, "Search on TV", ImeAction.Search, {}, true, remember { FocusRequester() }
     ) {
         Text("Results open on the TV.", color = MaterialTheme.colorScheme.onSurfaceVariant)
     }
