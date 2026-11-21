@@ -1,0 +1,127 @@
+# The name shown in the "Actions" tab on GitHub.
+name: AirMouse TV Remote CI
+
+# TRIGGERS: when does this workflow run?
+on:
+  # Every push to main.
+  push:
+    branches: [main]
+  # Every pull request aimed at main (runs on the PR's code merged with main).
+  pull_request:
+    branches: [main]
+  # Adds a "Run workflow" button in the Actions tab, handy while learning.
+  workflow_dispatch:
+
+# If you push again while a run for the same branch is still going, cancel the
+# old run. It saves minutes, since only the newest commit matters.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # Lint is its own job, so it runs IN PARALLEL with the tests on a second VM.
+  # Two jobs finish in the time of the slower one, and the PR page shows
+  # "lint failed" and "tests passed" as separate checks.
+  lint:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Check out the code
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+
+      # Android Lint: static analysis for Android-specific problems (missing
+      # permissions, API level misuse, unused resources, accessibility, ...).
+      # By default any lint ERROR fails the build; warnings do not.
+      - name: Run lint
+        run: ./gradlew lintDebug --console=plain
+
+      - name: Upload lint reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: lint-reports
+          path: "**/build/reports/lint-results-*.html"
+          if-no-files-found: ignore
+
+  # A job is a group of steps that runs on one fresh virtual machine.
+  unit-tests:
+    # The runner: a clean Ubuntu VM that GitHub starts for each run and throws
+    # away afterwards. Nothing from your PC is there, only what the steps set up.
+    runs-on: ubuntu-latest
+    # Fail the job if it hangs, so a stuck build can't burn your free minutes.
+    timeout-minutes: 20
+
+    steps:
+      # 1. Download this repository's code onto the runner.
+      - name: Check out the code
+        uses: actions/checkout@v4
+
+      # 2. Install JDK 17. The project needs it (JDK 24 breaks the Android
+      #    Gradle plugin), so CI pins it instead of trusting the runner default.
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+
+      # 3. Install Gradle's caching. It also checks that gradle-wrapper.jar is
+      #    an official one, which blocks a tampered wrapper.
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+
+      # 4. Run the unit tests of every module.
+      #    --console=plain gives readable logs instead of a live progress bar.
+      - name: Run unit tests
+        run: ./gradlew testDebugUnitTest --console=plain
+
+      # 5. Keep the HTML test reports so you can download and read them from the
+      #    run page. "if: always()" uploads them even when tests FAIL, which is
+      #    exactly when you want them.
+      - name: Upload test reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-reports
+          path: "**/build/reports/tests/"
+          if-no-files-found: ignore
+
+  # A third parallel job: build a debug APK you can install on your phone.
+  # (A debug APK is signed automatically with a throwaway debug key, so this
+  # needs no secrets.)
+  build-apk:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Check out the code
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+
+      - name: Build debug APK
+        run: ./gradlew :app:assembleDebug --console=plain
+
+      # The APK is an ARTIFACT: download it from the run page's "Artifacts"
+      # section (kept 14 days so old runs don't pile up).
+      - name: Upload debug APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: debug-apk
+          path: app/build/outputs/apk/debug/*.apk
+          if-no-files-found: error
+          retention-days: 14
