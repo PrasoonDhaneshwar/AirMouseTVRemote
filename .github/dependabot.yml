@@ -1,0 +1,30 @@
+# Dependabot opens pull requests when a dependency has a newer version.
+# Each PR runs the Android CI workflow, so you see lint/tests/build results
+# BEFORE deciding to merge an update.
+version: 2
+
+updates:
+  # 1. Gradle dependencies (reads gradle/libs.versions.toml and the build files).
+  - package-ecosystem: gradle
+    directory: "/"
+    schedule:
+      interval: weekly
+      day: monday
+    # Never more than 5 update PRs open at once, so the PR list stays readable.
+    open-pull-requests-limit: 5
+    groups:
+      # Bundle small updates (minor and patch) into ONE PR instead of one PR per
+      # library. Major updates stay separate because they can break the build
+      # and deserve their own review.
+      gradle-minor-and-patch:
+        update-types:
+          - minor
+          - patch
+
+  # 2. The versions of the actions used in .github/workflows (checkout,
+  #    setup-java, ...). Without this, @v4 tags quietly go stale.
+  - package-ecosystem: github-actions
+    directory: "/"
+    schedule:
+      interval: weekly
+      day: monday
