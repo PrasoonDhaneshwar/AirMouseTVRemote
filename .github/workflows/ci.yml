@@ -36,7 +36,7 @@ jobs:
           java-version: 17
 
       - name: Set up Gradle
-        uses: gradle/actions/setup-gradle@v4
+        uses: gradle/actions/setup-gradle@v6
 
       # Android Lint: static analysis for Android-specific problems (missing
       # permissions, API level misuse, unused resources, accessibility, ...).
@@ -76,7 +76,7 @@ jobs:
       # 3. Install Gradle's caching. It also checks that gradle-wrapper.jar is
       #    an official one, which blocks a tampered wrapper.
       - name: Set up Gradle
-        uses: gradle/actions/setup-gradle@v4
+        uses: gradle/actions/setup-gradle@v6
 
       # 4. Run the unit tests of every module.
       #    --console=plain gives readable logs instead of a live progress bar.
@@ -111,7 +111,7 @@ jobs:
           java-version: 17
 
       - name: Set up Gradle
-        uses: gradle/actions/setup-gradle@v4
+        uses: gradle/actions/setup-gradle@v6
 
       - name: Build debug APK
         run: ./gradlew :app:assembleDebug --console=plain
@@ -149,7 +149,7 @@ jobs:
           java-version: 17
 
       - name: Set up Gradle
-        uses: gradle/actions/setup-gradle@v4
+        uses: gradle/actions/setup-gradle@v6
 
       - name: Build release APK (R8 on)
         run: ./gradlew :app:assembleRelease --console=plain
