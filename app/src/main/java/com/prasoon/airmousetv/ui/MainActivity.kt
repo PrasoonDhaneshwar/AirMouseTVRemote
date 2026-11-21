@@ -39,6 +39,12 @@ class MainActivity : ComponentActivity() {
     /** The TV volume key that a held phone volume button is holding down, or null when none is. */
     private var heldVolumeKey: TvKey? = null
 
+    /** The phone volume button that is down right now and was taken by the air mouse as click or Back, or null. */
+    private var pointerVolumeKey: Int? = null
+
+    /** The other volume button, pressed while [pointerVolumeKey] was held: ignored until it comes back up. */
+    private var ignoredVolumeKey: Int? = null
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
@@ -62,11 +68,38 @@ class MainActivity : ComponentActivity() {
     }
 
     /**
+     * The air mouse holds the phone's Bluetooth mouse role, and its sensors, only while the app is
+     * in front. Android takes the role away in the background in any case; this takes it back on return.
+     */
+    override fun onStart() {
+        super.onStart()
+        viewModel.setAirMouseForeground(true)
+    }
+
+    override fun onStop() {
+        viewModel.setAirMouseForeground(false)
+        super.onStop()
+    }
+
+    /**
      * While the remote is showing, the phone's volume buttons change the TV's volume: it is the
      * volume control already under the user's finger. On any other screen, and while the connection
      * is being re-established, they stay the phone's.
      */
     override fun onKeyDown(keyCode: Int, event: KeyEvent): Boolean {
+        // With the air mouse pointing, the buttons under the fingers are its click and Back: the
+        // thumb isn't on the screen then, and tapping it would move the phone more than a button does
+        // The other button is ignored while one is held for the pointer, or letting go of the first would
+        // land in the TV volume path below and step the volume
+        if (keyCode == pointerVolumeKey || keyCode == ignoredVolumeKey) return true
+        if (pointerVolumeKey != null && isVolumeKey(keyCode)) {
+            ignoredVolumeKey = keyCode
+            return true
+        }
+        if (isVolumeKey(keyCode) && event.repeatCount == 0 && viewModel.airVolumeKeyDown(keyCode == KeyEvent.KEYCODE_VOLUME_UP)) {
+            pointerVolumeKey = keyCode
+            return true
+        }
         val key = tvVolumeKey(keyCode) ?: return super.onKeyDown(keyCode, event)
         // Android repeats a held button, starting after about the time the on-screen keys take to
         // count as held; the first repeat is where a tap turns into a hold
@@ -78,6 +111,15 @@ class MainActivity : ComponentActivity() {
     }
 
     override fun onKeyUp(keyCode: Int, event: KeyEvent): Boolean {
+        if (keyCode == pointerVolumeKey) {
+            pointerVolumeKey = null
+            viewModel.airVolumeKeyUp()
+            return true
+        }
+        if (keyCode == ignoredVolumeKey) {
+            ignoredVolumeKey = null
+            return true
+        }
         if (heldVolumeKey != null && (keyCode == KeyEvent.KEYCODE_VOLUME_UP || keyCode == KeyEvent.KEYCODE_VOLUME_DOWN)) {
             releaseHeldVolumeKey()
             return true
@@ -95,8 +137,18 @@ class MainActivity : ComponentActivity() {
      */
     override fun onWindowFocusChanged(hasFocus: Boolean) {
         super.onWindowFocusChanged(hasFocus)
-        if (!hasFocus) releaseHeldVolumeKey()
+        if (!hasFocus) {
+            releaseHeldVolumeKey()
+            ignoredVolumeKey = null
+            // The same goes for a click held with a volume button, which would leave the TV dragging
+            if (pointerVolumeKey != null) {
+                pointerVolumeKey = null
+                viewModel.airVolumeKeyUp(cancelled = true)
+            }
+        }
     }
+
+    private fun isVolumeKey(keyCode: Int) = keyCode == KeyEvent.KEYCODE_VOLUME_UP || keyCode == KeyEvent.KEYCODE_VOLUME_DOWN
 
     private fun releaseHeldVolumeKey() {
         val key = heldVolumeKey ?: return

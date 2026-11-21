@@ -147,12 +147,15 @@ class RemoteRepository @Inject constructor(
         return tv
     }
 
+    /** Lists [tv] (e.g. the saved one, once it answers), replacing an entry for the same TV. */
+    fun addDiscovered(tv: DiscoveredTv) = updateDiscoveredList(tv)
+
     /**
      * Probes the whole local network for TVs and lists those found. For networks that block the
      * multicast discovery relies on.
      */
-    suspend fun scanSubnet() {
-        val hosts = subnetScanner.findTvHosts()
+    suspend fun scanSubnet(patient: Boolean = true) {
+        val hosts = subnetScanner.findTvHosts(patient)
         session.note("subnet scan found ${hosts.size} TV(s)")
         hosts.forEach { addByAddress(it) }
     }
