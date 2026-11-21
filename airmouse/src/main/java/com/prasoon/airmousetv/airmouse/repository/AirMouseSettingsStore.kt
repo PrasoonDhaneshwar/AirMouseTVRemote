@@ -25,7 +25,8 @@ class AirMouseSettingsStore(context: Context) {
             volumeButtons = VolumeButtons.entries.firstOrNull { it.name == prefs.getString("volume_buttons", null) }
                 ?: defaults.volumeButtons,
             airPointing = prefs.getBoolean("air_pointing", defaults.airPointing),
-            scrollWith = ScrollWith.entries.firstOrNull { it.name == prefs.getString("scroll_with", null) } ?: defaults.scrollWith
+            scrollWith = ScrollWith.entries.firstOrNull { it.name == prefs.getString("scroll_with", null) } ?: defaults.scrollWith,
+            scrollSpeed = prefs.getFloat("scroll_speed", defaults.scrollSpeed)
         )
     }
 
@@ -36,6 +37,7 @@ class AirMouseSettingsStore(context: Context) {
             putString("volume_buttons", settings.volumeButtons.name)
             putBoolean("air_pointing", settings.airPointing)
             putString("scroll_with", settings.scrollWith.name)
+            putFloat("scroll_speed", settings.scrollSpeed)
         }
     }
 

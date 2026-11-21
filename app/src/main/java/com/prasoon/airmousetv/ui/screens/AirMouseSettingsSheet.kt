@@ -112,6 +112,18 @@ private fun AirMouseSettingsContent(air: AirMouseUiState, tvName: String, action
             Calibrate(air.calibrating, air.calibrated, actions.onCalibrate)
             VolumeButtonsChoice(settings.volumeButtons) { actions.onChange(settings.copy(volumeButtons = it)) }
         }
+        SettingSlider(
+            title = "Scroll speed",
+            value = settings.scrollSpeed,
+            valueLabel = when {
+                settings.scrollSpeed < 0.34f -> "Slow"
+                settings.scrollSpeed > 0.66f -> "Fast"
+                else -> "Medium"
+            },
+            lowLabel = "Slower",
+            highLabel = "Faster",
+            onChange = { actions.onChange(settings.copy(scrollSpeed = it)) }
+        )
         ScrollWithChoice(settings.scrollWith) { actions.onChange(settings.copy(scrollWith = it)) }
 
         Row(verticalAlignment = Alignment.CenterVertically) {

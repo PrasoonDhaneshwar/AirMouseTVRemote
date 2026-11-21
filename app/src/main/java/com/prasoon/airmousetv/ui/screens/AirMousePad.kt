@@ -91,11 +91,14 @@ import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.prasoon.airmousetv.airmouse.api.scrollFactor
 import com.prasoon.airmousetv.airmouse.model.AirMouseSettings
 import com.prasoon.airmousetv.airmouse.model.AirMouseUiState
 import com.prasoon.airmousetv.airmouse.model.PointerButton
 import com.prasoon.airmousetv.airmouse.model.PointerLinkState
 import com.prasoon.airmousetv.airmouse.model.VolumeButtons
+import com.prasoon.airmousetv.data.api.SCROLL_STEP_DP
+import com.prasoon.airmousetv.data.api.ScrollAxisLock
 import com.prasoon.airmousetv.ui.theme.AirMouseTVRemoteTheme
 import com.prasoon.airmousetv.ui.theme.Faint
 import com.prasoon.airmousetv.ui.theme.Hairline
@@ -106,9 +109,6 @@ import com.prasoon.airmousetv.ui.theme.SurfaceHigh
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.withTimeoutOrNull
 import kotlin.math.abs
-
-/** Distance dragged, in dp, that turns the TV's wheel by one notch: about a finger's width, like a notch on a real wheel. */
-private const val SCROLL_DP_PER_NOTCH = 24f
 
 /**
  * The longest a touch can last and still be a tap. A finger resting longer than that is not asking
@@ -210,6 +210,9 @@ private fun BoxScope.PointingSurface(settings: AirMouseSettings, hasGyroscope: B
     val currentActions by rememberUpdatedState(actions)
     val view = LocalView.current
     val airPointing = settings.airPointing && hasGyroscope
+    // The distance of a notch is the touchpad's, stretched or shrunk by the Scroll speed setting
+    val stepDp = SCROLL_STEP_DP / settings.scrollFactor()
+    val currentStepDp by rememberUpdatedState(stepDp)
 
     Box(
         modifier = Modifier
@@ -247,6 +250,8 @@ private fun BoxScope.PointingSurface(settings: AirMouseSettings, hasGyroscope: B
                     var travelled = Offset.Zero
                     var sliding = false
                     var scrolling = false
+                    // A drag scrolls one way only, like the touchpad's steps, so a slanted finger sends no stray keys
+                    val axis = ScrollAxisLock(slop)
                     // True while the mouse button is held down for a long press, until the finger lifts
                     var held = false
                     var lastMs = down.uptimeMillis
@@ -289,8 +294,9 @@ private fun BoxScope.PointingSurface(settings: AirMouseSettings, hasGyroscope: B
                                 // As on the touchpad: fingers moving down scroll down (the Down key) and fingers
                                 // moving right scroll right, so the two modes feel the same
                                 if (fingers.size >= 2) {
-                                    val notchPx = SCROLL_DP_PER_NOTCH.dp.toPx()
-                                    currentActions.onScroll(delta.x / notchPx, -delta.y / notchPx)
+                                    val notchPx = currentStepDp.dp.toPx()
+                                    val (sx, sy) = axis.add(delta.x, delta.y)
+                                    if (sx != 0f || sy != 0f) currentActions.onScroll(sx / notchPx, -sy / notchPx)
                                 }
                             } else {
                                 travelled += delta
@@ -301,8 +307,9 @@ private fun BoxScope.PointingSurface(settings: AirMouseSettings, hasGyroscope: B
                                 // The pointer follows the phone, so a thumb drag is free to scroll, in the touchpad's directions
                                 // (not while the button is held: the pointer is following the phone and the finger just rests)
                                 if (sliding && airPointing && !held) {
-                                    val notchPx = SCROLL_DP_PER_NOTCH.dp.toPx()
-                                    currentActions.onScroll(delta.x / notchPx, -delta.y / notchPx)
+                                    val notchPx = currentStepDp.dp.toPx()
+                                    val (sx, sy) = axis.add(delta.x, delta.y)
+                                    if (sx != 0f || sy != 0f) currentActions.onScroll(sx / notchPx, -sy / notchPx)
                                 }
                             }
                             event.changes.forEach { it.consume() }
@@ -331,11 +338,13 @@ private fun BoxScope.PointingSurface(settings: AirMouseSettings, hasGyroscope: B
     if (!airPointing) {
         ScrollStrip(
             horizontal = false,
+            stepDp = stepDp,
             onScroll = { currentActions.onScroll(0f, it) },
             modifier = Modifier.align(Alignment.CenterEnd).padding(end = 12.dp, top = 56.dp, bottom = 56.dp)
         )
         ScrollStrip(
             horizontal = true,
+            stepDp = stepDp,
             onScroll = { currentActions.onScroll(it, 0f) },
             modifier = Modifier.align(Alignment.BottomStart).padding(start = 12.dp, end = 56.dp, bottom = 12.dp)
         )
@@ -513,7 +522,7 @@ private fun AirPointingKey(on: Boolean, enabled: Boolean, onChange: (Boolean) ->
  * along the strip's own direction.
  */
 @Composable
-private fun ScrollStrip(horizontal: Boolean, onScroll: (Float) -> Unit, modifier: Modifier = Modifier) {
+private fun ScrollStrip(horizontal: Boolean, stepDp: Float, onScroll: (Float) -> Unit, modifier: Modifier = Modifier) {
     val currentOnScroll by rememberUpdatedState(onScroll)
     val view = LocalView.current
     val hint = MaterialTheme.colorScheme.onSurfaceVariant
@@ -525,8 +534,8 @@ private fun ScrollStrip(horizontal: Boolean, onScroll: (Float) -> Unit, modifier
             contentDescription = if (horizontal) "Sideways scroll strip. Drag left or right to scroll on the TV."
             else "Scroll strip. Drag up or down to scroll on the TV."
         }
-        .pointerInput(horizontal) {
-            val notchPx = SCROLL_DP_PER_NOTCH.dp.toPx()
+        .pointerInput(horizontal, stepDp) {
+            val notchPx = stepDp.dp.toPx()
             awaitEachGesture {
                 // Consumed, so the pad underneath doesn't take this finger for a tap or a hold
                 awaitFirstDown().consume()

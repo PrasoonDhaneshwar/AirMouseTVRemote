@@ -37,6 +37,14 @@ class AirMouseControlsTest {
     }
 
     @Test
+    fun `the scroll speed slider runs from half to double, with the middle as the default`() {
+        assertEquals(1f, AirMouseSettings(scrollSpeed = 0.5f).scrollFactor(), 1e-4f)
+        assertEquals(LOWEST_SENSITIVITY, AirMouseSettings(scrollSpeed = 0f).scrollFactor(), 1e-4f)
+        assertEquals(HIGHEST_SENSITIVITY, AirMouseSettings(scrollSpeed = 1f).scrollFactor(), 1e-4f)
+        assertEquals(HIGHEST_SENSITIVITY, AirMouseSettings(scrollSpeed = 9f).scrollFactor(), 1e-4f)
+    }
+
+    @Test
     fun `Smooth Air is passed on as it is`() {
         assertEquals(0.8f, AirMouseSettings(smoothAir = 0.8f).toPointerSettings().smoothing, 0f)
     }

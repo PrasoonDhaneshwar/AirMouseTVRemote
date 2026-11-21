@@ -127,4 +127,6 @@ data class AirMouseSettings(
     /** True if moving the phone moves the pointer; false if the pad is used as a mouse pad. */
     val airPointing: Boolean = true,
     val scrollWith: ScrollWith = ScrollWith.TV_KEYS,
+    /** A slider position like [sensitivity]: how far a finger has to drag to scroll, half as far at one end and twice as far at the other. */
+    val scrollSpeed: Float = 0.5f,
 )

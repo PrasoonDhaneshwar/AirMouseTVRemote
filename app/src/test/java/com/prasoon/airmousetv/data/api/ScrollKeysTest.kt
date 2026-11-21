@@ -8,6 +8,31 @@ import org.junit.Test
 class ScrollKeysTest {
 
     @Test
+    fun `a drag scrolls along the axis it began on and drops the other`() {
+        val lock = ScrollAxisLock(decideAfter = 10f)
+        // Nothing until the finger has travelled far enough to tell
+        assertEquals(0f to 0f, lock.add(2f, 1f))
+        // Then everything dragged so far on the chosen axis, and nothing sideways
+        assertEquals(12f to 0f, lock.add(10f, 6f))
+        assertEquals(5f to 0f, lock.add(5f, 20f))
+    }
+
+    @Test
+    fun `a vertical drag keeps only its vertical part`() {
+        val lock = ScrollAxisLock(decideAfter = 10f)
+        assertEquals(0f to 12f, lock.add(3f, 12f))
+        assertEquals(0f to -4f, lock.add(2f, -4f))
+    }
+
+    @Test
+    fun `the next drag may choose the other axis`() {
+        val lock = ScrollAxisLock(decideAfter = 10f)
+        lock.add(20f, 0f)
+        lock.reset()
+        assertEquals(0f to 15f, lock.add(0f, 15f))
+    }
+
+    @Test
     fun `scrolling up sends Up and scrolling down sends Down`() {
         assertEquals(listOf(TvKey.UP), ScrollKeys().add(0f, 1f))
         assertEquals(listOf(TvKey.DOWN, TvKey.DOWN), ScrollKeys().add(0f, -2f))

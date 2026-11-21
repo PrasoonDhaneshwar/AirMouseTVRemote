@@ -135,6 +135,7 @@ import androidx.compose.ui.unit.sp
 import androidx.core.content.edit
 import com.prasoon.airmousetv.airmouse.model.AirMouseSetupStep
 import com.prasoon.airmousetv.airmouse.model.AirMouseUiState
+import com.prasoon.airmousetv.data.api.SCROLL_STEP_DP
 import com.prasoon.airmousetv.data.model.DiscoveredTv
 import com.prasoon.airmousetv.data.model.KeyAction
 import com.prasoon.airmousetv.airmouse.model.PointerLinkState
@@ -1178,9 +1179,6 @@ private fun PadModeToggle(selected: PadMode, modes: List<PadMode>, proOn: PadMod
     }
 }
 
-/** Distance dragged, in dp, that counts as one D-pad step. */
-private const val SWIPE_STEP_DP = 40
-
 /** How long an edge arrow stays lit after the last step its way: long enough to see, gone soon after the finger stops. */
 private const val STEP_FLASH_MS = 160L
 
@@ -1188,14 +1186,14 @@ private const val STEP_FLASH_MS = 160L
 private val TOUCHPAD_GRID = 22.dp
 
 /**
- * A surface that turns swipes into D-pad presses (one per [SWIPE_STEP_DP] dragged, so a long swipe
+ * A surface that turns swipes into D-pad presses (one per [SCROLL_STEP_DP] dragged, so a long swipe
  * keeps scrolling) and a tap into OK. A soft dot follows the finger, and the arrow at the matching
  * edge lights up for each step sent, so the user can see what the TV is being told without looking
  * for it on the TV. Nothing moves unless a finger is down.
  */
 @Composable
 private fun Touchpad(onKey: (TvKey, KeyAction) -> Unit, enabled: Boolean, modifier: Modifier = Modifier) {
-    val stepPx = with(LocalDensity.current) { SWIPE_STEP_DP.dp.toPx() }
+    val stepPx = with(LocalDensity.current) { SCROLL_STEP_DP.dp.toPx() }
     val currentOnKey by rememberUpdatedState(onKey)
     val view = LocalView.current
     val teal = MaterialTheme.colorScheme.primary

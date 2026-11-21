@@ -25,11 +25,14 @@ enum class VolumeAction {
  * half speed at one end and double at the other, because that is how a change of speed feels: each
  * step the same amount faster than the last, not the same number of counts.
  */
-fun AirMouseSettings.toPointerSettings(): PointerSettings {
-    val position = sensitivity.coerceIn(0f, 1f)
-    val factor = LOWEST_SENSITIVITY * (HIGHEST_SENSITIVITY / LOWEST_SENSITIVITY).pow(position)
-    return PointerSettings(sensitivity = factor, smoothing = smoothAir.coerceIn(0f, 1f))
-}
+fun AirMouseSettings.toPointerSettings(): PointerSettings =
+    PointerSettings(sensitivity = speedFactor(sensitivity), smoothing = smoothAir.coerceIn(0f, 1f))
+
+/** How many times faster than the default a drag of the pad scrolls, on the same half-to-double curve as the pointer. */
+fun AirMouseSettings.scrollFactor(): Float = speedFactor(scrollSpeed)
+
+private fun speedFactor(position: Float): Float =
+    LOWEST_SENSITIVITY * (HIGHEST_SENSITIVITY / LOWEST_SENSITIVITY).pow(position.coerceIn(0f, 1f))
 
 /**
  * What the volume button does: [volumeUp] for the upper one. The buttons only stand in for click
