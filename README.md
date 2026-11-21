@@ -8,6 +8,7 @@
 ![Kotlin](https://img.shields.io/badge/Kotlin-2.0-7F52FF?logo=kotlin&logoColor=white)
 ![Jetpack Compose](https://img.shields.io/badge/UI-Jetpack%20Compose-4285F4?logo=jetpackcompose&logoColor=white)
 ![Hilt](https://img.shields.io/badge/DI-Hilt-2C8EBB)
+[![CI](https://github.com/PrasoonDhaneshwar/AirMouseTVRemote/actions/workflows/ci.yml/badge.svg)](https://github.com/PrasoonDhaneshwar/AirMouseTVRemote/actions/workflows/ci.yml)
 
 [**⬇️ Download the APK**](https://github.com/PrasoonDhaneshwar/AirMouseTVRemote/releases/download/1.4/AirMouseTVRemote-v1.4.apk)
 
