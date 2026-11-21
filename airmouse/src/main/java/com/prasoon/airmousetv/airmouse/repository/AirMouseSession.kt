@@ -3,8 +3,12 @@ package com.prasoon.airmousetv.airmouse.repository
 import android.content.Context
 import android.os.SystemClock
 import android.util.Log
+import com.prasoon.airmousetv.airmouse.api.AUTO_CALIBRATION_MIN_CHANGE_RAD_S
 import com.prasoon.airmousetv.airmouse.api.CALIBRATION_SECONDS
 import com.prasoon.airmousetv.airmouse.api.GyroCalibration
+import com.prasoon.airmousetv.airmouse.api.RestBiasEstimator
+import com.prasoon.airmousetv.airmouse.api.Vec3
+import kotlin.math.abs
 import com.prasoon.airmousetv.airmouse.api.PointerMove
 import com.prasoon.airmousetv.airmouse.api.PointerPipeline
 import com.prasoon.airmousetv.airmouse.api.PointerSink
@@ -89,6 +93,16 @@ class AirMouseSession private constructor(
     /** Collects gyroscope readings while a calibration runs; null otherwise. */
     @Volatile private var calibration: GyroCalibration? = null
 
+    /** Reads the gyroscope's drift off the phone whenever it is put down; see [RestBiasEstimator]. */
+    private val restBias = RestBiasEstimator()
+
+    /** True while the sensors run for an open pad; the pointer is shown to the TV only then. */
+    @Volatile private var sensingNow = false
+
+    private fun wake() {
+        events.trySend(PointerEvent.Paced(wakeMoves()))
+    }
+
     /** Ends the stillness after a press; replaced when another press starts before it has run. */
     private var unfreeze: Job? = null
 
@@ -155,8 +169,8 @@ class AirMouseSession private constructor(
                     PointerLinkState.READY -> {
                         store.hasMouseRole = true
                         pipeline.reset()
-                        // The TV hides a pointer nobody has moved for a while; show it before the user aims
-                        events.trySend(PointerEvent.Paced(wakeMoves()))
+                        // Only for a pad that is open: on the D-pad or touchpad a pointer would just be in the way
+                        if (sensingNow) wake()
                     }
                     else -> Unit
                 }
@@ -200,21 +214,42 @@ class AirMouseSession private constructor(
         // Found under one of its names: saved under the rest too, so it is found by the name it goes by next time
         if (address != null) links.save(tvKeys, address)
         if (!hidSink.start(address, tvNames)) return false
+        val padOpened = sensing && !sensingNow
+        sensingNow = sensing
+        // The TV hides a pointer nobody has moved for a while; show it as the pad opens, before the user aims
+        if (padOpened && state.value == PointerLinkState.READY) wake()
         if (sensing) {
             sensors.start { sample ->
                 calibration?.add(sample.angular)
+                restBias.add(sample)?.let(::adoptRestBias)
                 pipeline.onMotion(sample)?.let(::send)
             }
         } else {
             sensors.stop()
+            restBias.reset()
             pipeline.reset()
         }
         return true
     }
 
+    /**
+     * Takes the drift read off a resting phone as the one to correct by. The readings it came from
+     * were raw, so it replaces the old correction, like a manual calibration. Not while one runs.
+     */
+    private fun adoptRestBias(bias: Vec3) {
+        if (calibration != null) return
+        val old = pipeline.gyroBias
+        if (maxOf(abs(bias.x - old.x), abs(bias.y - old.y), abs(bias.z - old.z)) < AUTO_CALIBRATION_MIN_CHANGE_RAD_S) return
+        Log.i(TAG, "Gyro drift read off a resting phone: $bias (was $old)")
+        store.gyroBias = bias
+        pipeline.gyroBias = bias
+    }
+
     /** Lets the pointer go: stops the sensors and gives the Bluetooth mouse role back. Call from the main thread. */
     fun stop() {
+        sensingNow = false
         sensors.stop()
+        restBias.reset()
         pipeline.reset()
         wheelFlush?.cancel()
         panFlush?.cancel()
@@ -302,6 +337,7 @@ class AirMouseSession private constructor(
         // Held still meanwhile: a hand that moves while the pointer is walked back would take it somewhere else
         unfreeze?.cancel()
         pipeline.freeze()
+        Log.i(TAG, "Recenter: queued, link ${state.value}")
         events.trySend(PointerEvent.Paced(recenterMoves(), holdStill = true))
     }
 
@@ -337,13 +373,22 @@ class AirMouseSession private constructor(
                     is PointerEvent.Move -> sink.move(event.dx, event.dy)
                     is PointerEvent.Button -> sink.button(event.button, event.down)
                     is PointerEvent.Scroll -> sink.scroll(event.dx, event.dy)
-                    is PointerEvent.Paced -> try {
-                        for (move in event.moves) {
-                            sink.move(move.dx, move.dy)
-                            delay(PACED_MOVE_GAP_MS)
+                    is PointerEvent.Paced -> {
+                        val startedMs = SystemClock.uptimeMillis()
+                        var sent = 0
+                        try {
+                            for (move in event.moves) {
+                                sink.move(move.dx, move.dy)
+                                sent++
+                                delay(PACED_MOVE_GAP_MS)
+                            }
+                        } finally {
+                            if (event.holdStill) {
+                                pipeline.unfreeze()
+                                // 10 ms a move is what the walk back counts on, so a long total says the TV got fewer
+                                Log.i(TAG, "Recenter: sent $sent of ${event.moves.size} moves in ${SystemClock.uptimeMillis() - startedMs} ms")
+                            }
                         }
-                    } finally {
-                        if (event.holdStill) pipeline.unfreeze()
                     }
                 }
             } catch (e: CancellationException) {
