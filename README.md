@@ -10,7 +10,7 @@
 ![Hilt](https://img.shields.io/badge/DI-Hilt-2C8EBB)
 [![CI](https://github.com/PrasoonDhaneshwar/AirMouseTVRemote/actions/workflows/ci.yml/badge.svg)](https://github.com/PrasoonDhaneshwar/AirMouseTVRemote/actions/workflows/ci.yml)
 
-[**⬇️ Download the APK**](https://github.com/PrasoonDhaneshwar/AirMouseTVRemote/releases/download/1.4/AirMouseTVRemote-v1.4.apk)
+[**⬇️ Download the APK**](https://github.com/PrasoonDhaneshwar/AirMouseTVRemote/releases/download/2.0/AirMouseTVRemote-v2.0.apk)
 
 </div>
 
@@ -46,7 +46,7 @@
 ## 👇 Get started
 
 1. Put your phone and TV on the **same Wi-Fi network**.
-2. [Download the APK](https://github.com/PrasoonDhaneshwar/AirMouseTVRemote/releases/download/1.4/AirMouseTVRemote-v1.4.apk) and install it.
+2. [Download the APK](https://github.com/PrasoonDhaneshwar/AirMouseTVRemote/releases/download/2.0/AirMouseTVRemote-v2.0.apk) and install it.
 3. Open the app and pick your TV from the list.
 4. Type the code shown on the TV screen. It connects as soon as all six characters are in.
 5. Start navigating.
