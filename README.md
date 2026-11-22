@@ -1,8 +1,8 @@
 <div align="center">
 
-# 📺 Air Mouse TV Remote
+<img src="docs/store/feature-graphic.png" alt="Air Mouse TV Remote: your phone becomes a TV remote and an air mouse" width="100%" />
 
-**Turn your phone into a remote for any Android TV / Google TV: no pairing hardware, no cloud, just your Wi-Fi.**
+**Turn your phone into a remote and air mouse for any Android TV / Google TV: no pairing hardware, no cloud, just your Wi-Fi.**
 
 ![Platform](https://img.shields.io/badge/platform-Android%207.0%2B-3DDC84?logo=android&logoColor=white)
 ![Kotlin](https://img.shields.io/badge/Kotlin-2.0-7F52FF?logo=kotlin&logoColor=white)
@@ -21,12 +21,23 @@
 - **Finds your TV automatically.** mDNS discovery, a scan of the local network for networks that block it, and an HTTP name lookup for TVs that don't advertise one. You can also add a TV by its IP address, and the last TV is remembered so the app reconnects on launch.
 - **Pairs like the official app.** Type the 6-character code shown on the TV once (digits and capital letters on one keyboard) and it connects by itself as soon as the last character is in. The app remembers the TV's certificate and refuses a different device answering at the same address.
 - **Full remote on one screen.** A big D-pad or a touchpad, OK, Back, Home, volume, mute, power and media controls, with no scrolling. Keys answer your thumb with a tick, hold one for a long press, and the phone's own volume buttons change the TV's volume.
+- **Air mouse.** Point the phone at the TV to move a real pointer, tap to click and swipe to scroll. It travels over Bluetooth, Recenter brings the pointer back to the middle, and the volume buttons can click and go Back.
 - **Type on the TV.** When a TV search box asks for text, a sheet opens above the phone keyboard and types straight into it. It follows what the TV really holds and shows whether your text has reached the TV.
 - **YouTube search.** YouTube's own keyboard can't be typed into from a phone, so a button opens the results for your search on the TV.
 - **Honest connection state.** The UI reflects whether the TV is really reachable, and reconnects when the network comes back.
 - **Accessible and small.** The keys work with TalkBack, and the release APK is about 1.7 MB.
 
+## 📱 Screenshots
+
+| Air mouse | Remote | Touchpad | Typing | Finding TVs |
+|:---:|:---:|:---:|:---:|:---:|
+| <img src="docs/store/screenshot-01-air-mouse.png" width="150" alt="Air mouse pad" /> | <img src="docs/store/screenshot-02-remote.png" width="150" alt="D-pad remote" /> | <img src="docs/store/screenshot-03-touchpad.png" width="150" alt="Touchpad" /> | <img src="docs/store/screenshot-04-typing.png" width="150" alt="Typing into a TV search box" /> | <img src="docs/store/screenshot-05-discovery.png" width="150" alt="TV list" /> |
+
 ## 🎬 See it in action
+
+**Air mouse:** point the phone and the pointer follows on the TV.
+
+<img src="docs/gifs/air-mouse.gif" width="780" alt="Moving the phone moves a pointer across the TV home screen" />
 
 | Find & pair | Navigate | Type on the TV | Switch TV |
 |:---:|:---:|:---:|:---:|
