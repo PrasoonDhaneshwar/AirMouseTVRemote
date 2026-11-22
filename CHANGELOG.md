@@ -4,15 +4,22 @@ All notable changes to Air Mouse TV Remote. Versions match the git tags and GitH
 
 ## [Unreleased]
 
+## [2.0] - 2026-11-22
+
 ### Added
 - Air mouse: point the phone at the TV and a pointer follows. The phone acts as a Bluetooth mouse,
   so nothing is installed on the TV. Tap the pad to click, hold a finger on it to freeze the
-  pointer while re-aiming, and scroll with two fingers or the strip at the edge. Pointing pauses
-  when the phone is put down. While pointing, Vol + clicks and Vol − is Back.
+  pointer while re-aiming, and scroll with two fingers or the strip at the edge, at the touchpad's
+  pace and one direction at a time. Pointing pauses when the phone is put down. While pointing,
+  Vol + clicks and Vol − is Back.
+- The TV's pointer stays hidden until you open the air mouse pad, so it doesn't appear while you
+  use the D-pad or touchpad.
+- The pointer corrects its own drift after the phone has rested for about two seconds, so the first
+  use is smooth without calibrating in the settings.
 - An "Air pointing" switch on the pad turns it into a laptop-style mouse pad instead. Phones
   without a gyroscope only have the mouse pad.
 - Recenter brings a pointer lost at an edge back to about the middle of the screen.
-- Air mouse settings: sensitivity, Smooth Air, a calibration for a pointer that drifts by itself,
+- Air mouse settings: sensitivity, scroll speed, Smooth Air, a calibration for a pointer that drifts by itself,
   what the volume buttons do, and Unlink.
 - The air mouse appears in the mode switch, with a PRO mark, on phones that can be a Bluetooth
   mouse. Picking it before setup offers the setup in place of the pad, and the Paired screen offers
@@ -124,7 +131,8 @@ All notable changes to Air Mouse TV Remote. Versions match the git tags and GitH
 - Reconnect, and a connection state that shows whether the TV is really reachable.
 - The "Deep Code" dark theme.
 
-[Unreleased]: https://github.com/PrasoonDhaneshwar/AirMouseTVRemote/compare/1.4...HEAD
+[Unreleased]: https://github.com/PrasoonDhaneshwar/AirMouseTVRemote/compare/2.0...HEAD
+[2.0]: https://github.com/PrasoonDhaneshwar/AirMouseTVRemote/compare/1.4...2.0
 [1.4]: https://github.com/PrasoonDhaneshwar/AirMouseTVRemote/compare/1.3...1.4
 [1.3]: https://github.com/PrasoonDhaneshwar/AirMouseTVRemote/compare/1.2...1.3
 [1.2]: https://github.com/PrasoonDhaneshwar/AirMouseTVRemote/compare/1.1...1.2
