@@ -39,12 +39,14 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.ErrorOutline
+import androidx.compose.material.icons.filled.Mouse
 import androidx.compose.material.icons.filled.PriorityHigh
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
@@ -108,6 +110,7 @@ fun PairingScreen(
         onCodeChange = viewModel::updatePairingCode,
         onRetry = viewModel::retryPairing,
         onCancel = viewModel::cancelPairing,
+        onAirMouseOffer = viewModel::answerPairedOffer,
         modifier = modifier
     )
 }
@@ -124,6 +127,7 @@ private fun PairingContent(
     onCodeChange: (String) -> Unit,
     onRetry: () -> Unit,
     onCancel: () -> Unit,
+    onAirMouseOffer: (setUp: Boolean) -> Unit,
     modifier: Modifier = Modifier
 ) {
     // Once the mode has moved on (the remote is opening, or Cancel was tapped) this screen is still on show
@@ -198,7 +202,7 @@ private fun PairingContent(
                             SecondaryAction("Back to list", onCancel)
                         }
                     }
-                    PairingStep.PAIRED -> Paired(tvName)
+                    PairingStep.PAIRED -> Paired(tvName, offerAirMouse = state.pairedOffer, onAirMouseOffer = onAirMouseOffer)
                 }
             }
         }
@@ -402,7 +406,7 @@ private fun CodeBox(char: Char?, active: Boolean, rejected: Boolean, width: Dp) 
  * underneath fills for as long as the screen stays, so it is clear the remote is about to open.
  */
 @Composable
-private fun Paired(tvName: String) {
+private fun Paired(tvName: String, offerAirMouse: Boolean, onAirMouseOffer: (setUp: Boolean) -> Unit) {
     val teal = MaterialTheme.colorScheme.primary
     val onTeal = MaterialTheme.colorScheme.onPrimary
     val view = LocalView.current
@@ -420,50 +424,56 @@ private fun Paired(tvName: String) {
     }
     LaunchedEffect(Unit) { bar.animateTo(1f, tween(850, easing = LinearEasing)) }
 
-    Column(
-        modifier = Modifier.fillMaxSize().padding(24.dp),
-        horizontalAlignment = Alignment.CenterHorizontally,
-        verticalArrangement = Arrangement.spacedBy(28.dp, Alignment.CenterVertically)
-    ) {
-        Box(
-            modifier = Modifier
-                .size(160.dp)
-                .graphicsLayer {
-                    scaleX = grow.value
-                    scaleY = grow.value
-                }
-                .background(teal.copy(alpha = 0.08f), CircleShape),
-            contentAlignment = Alignment.Center
+    Column(modifier = Modifier.fillMaxSize().padding(24.dp), horizontalAlignment = Alignment.CenterHorizontally) {
+        Column(
+            modifier = Modifier.weight(1f).fillMaxWidth(),
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.spacedBy(28.dp, Alignment.CenterVertically)
         ) {
-            Box(Modifier.size(116.dp).background(teal.copy(alpha = 0.16f), CircleShape))
-            Box(Modifier.size(84.dp).background(teal, CircleShape), contentAlignment = Alignment.Center) {
-                Canvas(Modifier.size(44.dp)) {
-                    // A tick on a 24-unit grid, drawn only as far along as the animation has got
-                    val unit = size.width / 24f
-                    val full = Path().apply {
-                        moveTo(5f * unit, 12.5f * unit)
-                        lineTo(9.5f * unit, 17f * unit)
-                        lineTo(19f * unit, 7.5f * unit)
+            Box(
+                modifier = Modifier
+                    .size(160.dp)
+                    .graphicsLayer {
+                        scaleX = grow.value
+                        scaleY = grow.value
                     }
-                    val measure = PathMeasure().apply { setPath(full, false) }
-                    val drawn = Path()
-                    measure.getSegment(0f, measure.length * tick.value, drawn, true)
-                    drawPath(drawn, onTeal, style = Stroke(2.6f * unit, cap = StrokeCap.Round, join = StrokeJoin.Round))
+                    .background(teal.copy(alpha = 0.08f), CircleShape),
+                contentAlignment = Alignment.Center
+            ) {
+                Box(Modifier.size(116.dp).background(teal.copy(alpha = 0.16f), CircleShape))
+                Box(Modifier.size(84.dp).background(teal, CircleShape), contentAlignment = Alignment.Center) {
+                    Canvas(Modifier.size(44.dp)) {
+                        // A tick on a 24-unit grid, drawn only as far along as the animation has got
+                        val unit = size.width / 24f
+                        val full = Path().apply {
+                            moveTo(5f * unit, 12.5f * unit)
+                            lineTo(9.5f * unit, 17f * unit)
+                            lineTo(19f * unit, 7.5f * unit)
+                        }
+                        val measure = PathMeasure().apply { setPath(full, false) }
+                        val drawn = Path()
+                        measure.getSegment(0f, measure.length * tick.value, drawn, true)
+                        drawPath(drawn, onTeal, style = Stroke(2.6f * unit, cap = StrokeCap.Round, join = StrokeJoin.Round))
+                    }
+                }
+            }
+            Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                Text("Paired", style = MaterialTheme.typography.headlineMedium.copy(fontSize = 28.sp, letterSpacing = 0.sp))
+                Text(
+                    "$tvName is ready",
+                    style = MaterialTheme.typography.bodyLarge,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    textAlign = TextAlign.Center
+                )
+            }
+            // The bar counts down to the remote opening by itself, which it doesn't while the offer waits for an answer
+            if (!offerAirMouse) {
+                Box(Modifier.size(width = 120.dp, height = 4.dp).clip(CircleShape).background(MaterialTheme.colorScheme.surfaceVariant)) {
+                    Box(Modifier.fillMaxHeight().fillMaxWidth(bar.value).background(teal))
                 }
             }
         }
-        Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(6.dp)) {
-            Text("Paired", style = MaterialTheme.typography.headlineMedium.copy(fontSize = 28.sp, letterSpacing = 0.sp))
-            Text(
-                "$tvName is ready",
-                style = MaterialTheme.typography.bodyLarge,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                textAlign = TextAlign.Center
-            )
-        }
-        Box(Modifier.size(width = 120.dp, height = 4.dp).clip(CircleShape).background(MaterialTheme.colorScheme.surfaceVariant)) {
-            Box(Modifier.fillMaxHeight().fillMaxWidth(bar.value).background(teal))
-        }
+        if (offerAirMouse) AirMouseOfferCard(tvName, onAirMouseOffer)
     }
 }
 
@@ -473,7 +483,7 @@ private val previewMode = RemoteMode.Pairing(
 
 @Composable
 private fun PairingPreview(uiState: RemoteUiState) {
-    AirMouseTVRemoteTheme { PairingContent(uiState = uiState, onCodeChange = {}, onRetry = {}, onCancel = {}) }
+    AirMouseTVRemoteTheme { PairingContent(uiState = uiState, onCodeChange = {}, onRetry = {}, onCancel = {}, onAirMouseOffer = {}) }
 }
 
 @Preview(showBackground = true, widthDp = 390, heightDp = 564, name = "Entering code (keyboard open)")
@@ -506,3 +516,54 @@ private fun PairingFailedPreview() = PairingPreview(
 @Preview(showBackground = true, widthDp = 390, heightDp = 844, name = "Paired")
 @Composable
 private fun PairingPairedPreview() = PairingPreview(RemoteUiState(mode = previewMode, awaitingCode = true, paired = true))
+
+/**
+ * The air mouse, offered once on the Paired screen: the one moment the user is looking at the app
+ * with nothing to do. It says what it is in a line and leaves both ways open.
+ */
+@Composable
+private fun AirMouseOfferCard(tvName: String, onAnswer: (setUp: Boolean) -> Unit) {
+    val shape = MaterialTheme.shapes.extraLarge
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(shape)
+            .background(SheetSurface)
+            .border(1.dp, MaterialTheme.colorScheme.surfaceVariant, shape)
+            .padding(20.dp),
+        verticalArrangement = Arrangement.spacedBy(12.dp)
+    ) {
+        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+            Box(
+                Modifier.size(44.dp).background(MaterialTheme.colorScheme.surfaceVariant, MaterialTheme.shapes.medium),
+                contentAlignment = Alignment.Center
+            ) {
+                Icon(Icons.Default.Mouse, contentDescription = null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(22.dp))
+            }
+            Column(Modifier.weight(1f)) {
+                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text("Try the air mouse", style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold))
+                    ProChip()
+                }
+                Text(
+                    "Point your phone at $tvName and a pointer follows your hand.",
+                    style = MaterialTheme.typography.bodyMedium.copy(fontSize = 13.sp),
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+        }
+        PrimaryAction("Set up air mouse", { onAnswer(true) })
+        TextButton(onClick = { onAnswer(false) }, modifier = Modifier.fillMaxWidth().height(44.dp)) {
+            Text(
+                "Go to the remote",
+                style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Medium),
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        }
+    }
+}
+
+@Preview(showBackground = true, widthDp = 390, heightDp = 844, name = "Paired, offering the air mouse")
+@Composable
+private fun PairingPairedOfferPreview() =
+    PairingPreview(RemoteUiState(mode = previewMode, awaitingCode = true, paired = true, pairedOffer = true))

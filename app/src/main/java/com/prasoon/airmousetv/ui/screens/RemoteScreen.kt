@@ -32,7 +32,7 @@ import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
-import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.selection.selectable
 import androidx.compose.foundation.shape.CircleShape
@@ -55,6 +55,7 @@ import androidx.compose.material.icons.filled.Keyboard
 import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.KeyboardArrowUp
 import androidx.compose.material.icons.filled.MoreVert
+import androidx.compose.material.icons.filled.Mouse
 import androidx.compose.material.icons.filled.PowerSettingsNew
 import androidx.compose.material.icons.filled.Remove
 import androidx.compose.material.icons.filled.Search
@@ -67,6 +68,7 @@ import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilledIconButton
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.IconButtonDefaults
@@ -80,6 +82,7 @@ import androidx.compose.material3.TextField
 import androidx.compose.material3.TextFieldDefaults
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
@@ -129,8 +132,13 @@ import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.core.content.edit
+import com.prasoon.airmousetv.airmouse.model.AirMouseSetupStep
+import com.prasoon.airmousetv.airmouse.model.AirMouseUiState
+import com.prasoon.airmousetv.data.api.SCROLL_STEP_DP
 import com.prasoon.airmousetv.data.model.DiscoveredTv
 import com.prasoon.airmousetv.data.model.KeyAction
+import com.prasoon.airmousetv.airmouse.model.PointerLinkState
 import com.prasoon.airmousetv.data.model.RemoteMode
 import com.prasoon.airmousetv.data.model.RemoteUiState
 import com.prasoon.airmousetv.data.model.TvKey
@@ -144,6 +152,7 @@ import com.prasoon.airmousetv.ui.theme.Offline
 import com.prasoon.airmousetv.ui.theme.OfflineText
 import com.prasoon.airmousetv.ui.theme.Online
 import com.prasoon.airmousetv.ui.theme.PadSurface
+import com.prasoon.airmousetv.ui.theme.SheetSurface
 import com.prasoon.airmousetv.ui.theme.SurfaceHigh
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -153,6 +162,24 @@ import kotlin.math.sign
 
 /** Set once the "hold a key to repeat it" tip has been closed or acted on, so it never shows again. */
 private const val PREF_HOLD_TIP_SEEN = "hold_tip_seen"
+
+/** Set once the tip that points at the air mouse has been closed, or the air mouse has been looked at. */
+private const val PREF_AIR_TIP_SEEN = "air_tip_seen"
+
+/** Set once the "⋮" menu has been opened while it carried the dot for the air mouse entry. */
+private const val PREF_AIR_MENU_SEEN = "air_menu_seen"
+
+/**
+ * How the remote advertises the air mouse right now. [inSwitch]: it has a segment in the mode
+ * switch. [proChip]: that segment and the menu entry carry the PRO mark, which they do until the
+ * TV is set up. [tip]: the one-time line under the switch. [menuDot]: the dot on "⋮".
+ */
+internal data class AirOffer(
+    val inSwitch: Boolean = false,
+    val proChip: Boolean = false,
+    val tip: Boolean = false,
+    val menuDot: Boolean = false,
+)
 
 /**
  * The working remote: D-pad or touchpad in the middle of the thumb's reach, Back/Home/Keyboard
@@ -171,7 +198,7 @@ fun RemoteScreen(viewModel: RemoteViewModel) {
     val dismissHoldTip = {
         if (showHoldTip) {
             showHoldTip = false
-            uiPrefs.edit().putBoolean(PREF_HOLD_TIP_SEEN, true).apply()
+            uiPrefs.edit { putBoolean(PREF_HOLD_TIP_SEEN, true) }
         }
     }
     var showTextEntry by remember { mutableStateOf(false) }
@@ -185,15 +212,89 @@ fun RemoteScreen(viewModel: RemoteViewModel) {
         if (showRequests > seenRequests) showTextEntry = true
         seenRequests = showRequests
     }
+    val selectPadMode = { mode: PadMode ->
+        padMode = mode
+        uiPrefs.edit { putString("pad_mode", mode.name) }
+    }
+    val copyDiagnostics = {
+        clipboard.setText(AnnotatedString(viewModel.diagnosticsReport()))
+        Toast.makeText(context, "Diagnostics copied", Toast.LENGTH_SHORT).show()
+    }
+
+    val airMouse = uiState.airMouse
+    // The air mouse is advertised (its place in the mode switch, the tip, the dot on the menu) only on
+    // a phone known to have the Bluetooth mouse role, so nobody is offered it and then told it can't work
+    val airOffered = airMouse.available && airMouse.roleKnown && !airMouse.linked
+    var airTipSeen by rememberSaveable { mutableStateOf(uiPrefs.getBoolean(PREF_AIR_TIP_SEEN, false)) }
+    var airMenuSeen by rememberSaveable { mutableStateOf(uiPrefs.getBoolean(PREF_AIR_MENU_SEEN, false)) }
+    val dismissAirTip = {
+        if (!airTipSeen) {
+            airTipSeen = true
+            uiPrefs.edit { putBoolean(PREF_AIR_TIP_SEEN, true) }
+        }
+    }
+    var showAirSettings by remember { mutableStateOf(false) }
+    // A remembered choice of the air mouse falls back to the D-pad on a TV, or a phone, where it has
+    // no place in the switch, and comes back by itself on the TV it was made for
+    val shownPadMode = if (padMode == PadMode.AIR_MOUSE && !airMouse.linked && !airOffered) PadMode.DPAD else padMode
+    // Before setup the air mouse segment shows the offer, which needs no pointer link
+    val airPadShowing = shownPadMode == PadMode.AIR_MOUSE && airMouse.linked
+    DisposableEffect(airPadShowing) {
+        viewModel.setAirMousePadShowing(airPadShowing)
+        onDispose { viewModel.setAirMousePadShowing(false) }
+    }
+    val allowBluetooth = rememberBluetoothPermissionRequest(onGranted = viewModel::retryAirMouse)
+    val turnOnBluetooth = rememberBluetoothEnableRequest()
+    val currentSettings by rememberUpdatedState(airMouse.settings)
+    val airPadActions = remember(viewModel) {
+        AirPadActions(
+            onPress = viewModel::airPress,
+            onSlide = viewModel::airSlide,
+            onButton = viewModel::airButton,
+            onScroll = viewModel::airScroll,
+            onRecenter = viewModel::airRecenter,
+            onAirPointing = { viewModel.updateAirMouseSettings(currentSettings.copy(airPointing = it)) },
+            onAllowBluetooth = { allowBluetooth() },
+            onTurnOnBluetooth = { turnOnBluetooth() },
+            onSetUpAgain = viewModel::redoAirMouseSetup,
+            onSetUp = viewModel::openAirMouseSetup
+        )
+    }
+
+    if (airMouse.setup != null) {
+        AirMouseSetupScreen(viewModel, airMouse, tvName, onKey = viewModel::sendKey, onCopyDiagnostics = copyDiagnostics)
+        // A setup that ends linked hands over to the pad it was for
+        LaunchedEffect(airMouse.setup) {
+            if (airMouse.setup == AirMouseSetupStep.DONE) selectPadMode(PadMode.AIR_MOUSE)
+        }
+        return
+    }
 
     RemoteContent(
         uiState = uiState,
         tvName = tvName,
-        padMode = padMode,
-        onPadModeChange = {
-            padMode = it
-            uiPrefs.edit().putString("pad_mode", it.name).apply()
+        padMode = shownPadMode,
+        onPadModeChange = { mode ->
+            // Going to look at the air mouse is what the tip was asking for
+            if (mode == PadMode.AIR_MOUSE) dismissAirTip()
+            selectPadMode(mode)
         },
+        airPadActions = airPadActions,
+        airOffer = AirOffer(
+            inSwitch = airMouse.linked || airOffered,
+            proChip = airOffered,
+            tip = airOffered && !airTipSeen && shownPadMode != PadMode.AIR_MOUSE,
+            menuDot = airOffered && !airMenuSeen
+        ),
+        onDismissAirTip = dismissAirTip,
+        onMenuOpened = {
+            if (!airMenuSeen) {
+                airMenuSeen = true
+                uiPrefs.edit { putBoolean(PREF_AIR_MENU_SEEN, true) }
+            }
+        },
+        onSetUpAirMouse = viewModel::openAirMouseSetup,
+        onAirMouseSettings = { showAirSettings = true },
         showHoldTip = showHoldTip,
         onDismissHoldTip = dismissHoldTip,
         onKey = { key, action ->
@@ -213,13 +314,26 @@ fun RemoteScreen(viewModel: RemoteViewModel) {
             }
         },
         onShowYouTubeSearch = { showYouTubeSearch = true },
-        onCopyDiagnostics = {
-            clipboard.setText(AnnotatedString(viewModel.diagnosticsReport()))
-            Toast.makeText(context, "Diagnostics copied", Toast.LENGTH_SHORT).show()
-        },
+        onCopyDiagnostics = copyDiagnostics,
         onSwitchTv = viewModel::switchTv
     )
 
+    if (showAirSettings && airMouse.linked) {
+        val settingsActions = remember(viewModel) {
+            AirSettingsActions(
+                onChange = viewModel::updateAirMouseSettings,
+                onCalibrate = viewModel::calibrateAirMouse,
+                onUnlink = {
+                    showAirSettings = false
+                    viewModel.unlinkAirMouse()
+                }
+            )
+        }
+        AirMouseSettingsSheet(airMouse, tvName, settingsActions, onDismiss = {
+            showAirSettings = false
+            viewModel.clearCalibrationResult()
+        })
+    }
     if (showTextEntry) {
         TextEntrySheet(viewModel = viewModel, tvName = tvName, onDismiss = { showTextEntry = false })
     }
@@ -240,8 +354,7 @@ private fun Header(
     reconnecting: Boolean,
     enabled: Boolean,
     onKey: (TvKey, KeyAction) -> Unit,
-    onCopyDiagnostics: () -> Unit,
-    onSwitchTv: () -> Unit
+    menu: @Composable () -> Unit
 ) {
     Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
         Column(modifier = Modifier.weight(1f)) {
@@ -275,24 +388,48 @@ private fun Header(
             container = Color.Transparent,
             border = BorderStroke(2.dp, Amber)
         ) { KeyIcon(Icons.Default.PowerSettingsNew, "Power", tint = Amber) }
-        OverflowMenu(onCopyDiagnostics, onSwitchTv)
+        menu()
     }
 }
 
-/** The "⋮" menu in the header: things that are about the app and the TV connection, not the remote keys. */
+/**
+ * The "⋮" menu in the header: things that are about the app and the TV connection, not the remote keys.
+ * The air mouse has one entry in it: the setup while the TV isn't set up ([onSetUpAirMouse], null on a
+ * phone that can't be a Bluetooth mouse), its settings once it is ([onAirMouseSettings]).
+ * With [dot] the button carries a mark that there is something new inside, until [onOpened] has run.
+ */
 @Composable
-private fun OverflowMenu(onCopyDiagnostics: () -> Unit, onSwitchTv: () -> Unit) {
+private fun OverflowMenu(
+    onCopyDiagnostics: () -> Unit,
+    onSwitchTv: () -> Unit,
+    onSetUpAirMouse: (() -> Unit)?,
+    onAirMouseSettings: (() -> Unit)?,
+    proChip: Boolean,
+    dot: Boolean,
+    onOpened: () -> Unit
+) {
     var expanded by remember { mutableStateOf(false) }
     Box {
         IconButton(
-            onClick = { expanded = true },
+            onClick = {
+                expanded = true
+                onOpened()
+            },
             modifier = Modifier.size(48.dp),
             colors = IconButtonDefaults.iconButtonColors(
                 containerColor = if (expanded) MaterialTheme.colorScheme.surfaceVariant else Color.Transparent,
                 contentColor = if (expanded) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.onSurfaceVariant
             )
         ) {
-            Icon(Icons.Default.MoreVert, contentDescription = "More")
+            Icon(Icons.Default.MoreVert, contentDescription = if (dot) "More, 1 new item" else "More")
+        }
+        if (dot) {
+            val teal = MaterialTheme.colorScheme.primary
+            // Ringed in the background colour, so it reads as a dot on the button and not part of the icon
+            Box(
+                Modifier.align(Alignment.TopEnd).padding(top = 9.dp, end = 10.dp).size(10.dp)
+                    .background(MaterialTheme.colorScheme.background, CircleShape).padding(1.dp).background(teal, CircleShape)
+            )
         }
         DropdownMenu(
             expanded = expanded,
@@ -301,6 +438,19 @@ private fun OverflowMenu(onCopyDiagnostics: () -> Unit, onSwitchTv: () -> Unit) 
             containerColor = MenuSurface,
             border = BorderStroke(1.dp, SurfaceHigh)
         ) {
+            if (onSetUpAirMouse != null) {
+                MenuItem("Set up air mouse", Icons.Default.Mouse, tint = MaterialTheme.colorScheme.primary, proChip = proChip) {
+                    expanded = false
+                    onSetUpAirMouse()
+                }
+                HorizontalDivider(color = SurfaceHigh)
+            } else if (onAirMouseSettings != null) {
+                MenuItem("Air mouse settings", Icons.Default.Mouse) {
+                    expanded = false
+                    onAirMouseSettings()
+                }
+                HorizontalDivider(color = SurfaceHigh)
+            }
             MenuItem("Switch TV", Icons.Default.SwapHoriz) {
                 expanded = false
                 onSwitchTv()
@@ -314,11 +464,22 @@ private fun OverflowMenu(onCopyDiagnostics: () -> Unit, onSwitchTv: () -> Unit) 
 }
 
 @Composable
-private fun MenuItem(text: String, icon: ImageVector, onClick: () -> Unit) {
+private fun MenuItem(
+    text: String,
+    icon: ImageVector,
+    tint: Color = MaterialTheme.colorScheme.onSurfaceVariant,
+    proChip: Boolean = false,
+    onClick: () -> Unit
+) {
     DropdownMenuItem(
-        text = { Text(text, style = MaterialTheme.typography.bodyLarge.copy(fontSize = 15.sp)) },
+        text = {
+            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                Text(text, style = MaterialTheme.typography.bodyLarge.copy(fontSize = 15.sp))
+                if (proChip) ProChip()
+            }
+        },
         leadingIcon = {
-            Icon(icon, contentDescription = null, tint = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.size(20.dp))
+            Icon(icon, contentDescription = null, tint = tint, modifier = Modifier.size(20.dp))
         },
         onClick = onClick
     )
@@ -335,11 +496,35 @@ private fun HoldTip(onDismiss: () -> Unit) {
             .padding(start = 16.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
-        Text("Hold a key to repeat it.", style = MaterialTheme.typography.bodyMedium, modifier = Modifier.weight(1f))
+        Text("Hold a key to repeat it. Hold OK or Power for menus.", style = MaterialTheme.typography.bodyMedium, modifier = Modifier.weight(1f))
         IconButton(onClick = onDismiss) {
             Icon(
                 Icons.Default.Close, contentDescription = "Dismiss tip",
                 tint = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.size(18.dp)
+            )
+        }
+    }
+}
+
+/**
+ * Shown once under the mode switch on a phone that can be an air mouse: without it, the third
+ * segment is just a word with a chip on it.
+ */
+@Composable
+private fun AirMouseTip(onDismiss: () -> Unit) {
+    Row(
+        modifier = Modifier
+            .clip(CircleShape)
+            .background(SheetSurface)
+            .border(1.dp, SurfaceHigh, CircleShape)
+            .padding(start = 14.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Text("Air mouse: point your phone at the TV", style = MaterialTheme.typography.bodyMedium.copy(fontSize = 13.sp))
+        IconButton(onClick = onDismiss, modifier = Modifier.size(40.dp)) {
+            Icon(
+                Icons.Default.Close, contentDescription = "Dismiss tip",
+                tint = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.size(16.dp)
             )
         }
     }
@@ -410,7 +595,7 @@ private val DPAD_SIZE = 290.dp
  * it is what the thumb comes back to. The arrows have no key shape of their own; the disc is the key.
  */
 @Composable
-private fun DPad(onKey: (TvKey, KeyAction) -> Unit, enabled: Boolean, size: Dp = DPAD_SIZE) {
+internal fun DPad(onKey: (TvKey, KeyAction) -> Unit, enabled: Boolean, size: Dp = DPAD_SIZE) {
     val scale = size / DPAD_SIZE
     val edge = 8.dp * scale
     val arrowShape = RoundedCornerShape(28.dp * scale)
@@ -458,7 +643,7 @@ private fun DPad(onKey: (TvKey, KeyAction) -> Unit, enabled: Boolean, size: Dp =
  * or [onClick] to run a local action.
  */
 @Composable
-private fun LabeledKey(
+internal fun LabeledKey(
     label: String,
     enabled: Boolean,
     onClick: (() -> Unit)?,
@@ -503,7 +688,7 @@ private fun rememberPlayPauseIcon(): ImageVector = remember {
 }
 
 @Composable
-private fun KeyIcon(
+internal fun KeyIcon(
     icon: ImageVector,
     description: String,
     tint: Color = MaterialTheme.colorScheme.onSurface,
@@ -518,6 +703,12 @@ private fun RemoteContent(
     tvName: String,
     padMode: PadMode,
     onPadModeChange: (PadMode) -> Unit,
+    airPadActions: AirPadActions,
+    airOffer: AirOffer,
+    onDismissAirTip: () -> Unit,
+    onMenuOpened: () -> Unit,
+    onSetUpAirMouse: () -> Unit,
+    onAirMouseSettings: () -> Unit,
     showHoldTip: Boolean,
     onDismissHoldTip: () -> Unit,
     onKey: (TvKey, KeyAction) -> Unit,
@@ -528,6 +719,7 @@ private fun RemoteContent(
 ) {
     val reconnecting = uiState.isReconnecting
     val enabled = !reconnecting
+    val airMouse = uiState.airMouse
 
     BoxWithConstraints(
         modifier = Modifier
@@ -548,7 +740,14 @@ private fun RemoteContent(
         ) {
             Header(
                 tvName, reconnecting = reconnecting, enabled = enabled, onKey = onKey,
-                onCopyDiagnostics = onCopyDiagnostics, onSwitchTv = onSwitchTv
+                menu = {
+                    OverflowMenu(
+                        onCopyDiagnostics, onSwitchTv,
+                        onSetUpAirMouse = onSetUpAirMouse.takeIf { airMouse.available && !airMouse.linked },
+                        onAirMouseSettings = onAirMouseSettings.takeIf { airMouse.linked },
+                        proChip = airOffer.proChip, dot = airOffer.menuDot, onOpened = onMenuOpened
+                    )
+                }
             )
 
             uiState.error?.let {
@@ -561,7 +760,14 @@ private fun RemoteContent(
                 AnimatedVisibility(visible = showHoldTip && enabled) {
                     Box(Modifier.padding(bottom = 14.dp)) { HoldTip(onDismissHoldTip) }
                 }
-                PadModeToggle(padMode, onPadModeChange)
+                PadModeToggle(
+                    padMode, PadMode.entries.filter { it != PadMode.AIR_MOUSE || airOffer.inSwitch },
+                    proOn = PadMode.AIR_MOUSE.takeIf { airOffer.proChip }, onSelect = onPadModeChange
+                )
+                // Below the switch it points at; gone for good once closed or once the air mouse has been looked at
+                AnimatedVisibility(visible = airOffer.tip && enabled) {
+                    Box(Modifier.padding(top = 10.dp)) { AirMouseTip(onDismissAirTip) }
+                }
             }
 
             // The pad takes whatever height the fixed rows leave. On a screen too short for that it gets a
@@ -577,6 +783,9 @@ private fun RemoteContent(
                         when (mode) {
                             PadMode.DPAD -> DPad(onKey, enabled, size = dpadSize)
                             PadMode.TOUCHPAD -> Touchpad(onKey, enabled, Modifier.fillMaxSize())
+                            // Not dimmed with the keys while the Wi-Fi session reconnects: the pointer
+                            // travels over Bluetooth and keeps working. It is told, so it doesn't promise working keys
+                            PadMode.AIR_MOUSE -> AirMousePad(airMouse, tvName, airPadActions, Modifier.fillMaxSize(), wifiUp = !reconnecting)
                         }
                     }
                 }
@@ -923,22 +1132,26 @@ private fun rememberFocusOnOpen(): FocusRequester {
 }
 
 /** How the directional keys are presented. */
-private enum class PadMode(val label: String) { DPAD("D-pad"), TOUCHPAD("Touchpad") }
+private enum class PadMode(val label: String) { DPAD("D-pad"), TOUCHPAD("Touchpad"), AIR_MOUSE("Air mouse") }
+
+/** The toggle's width for each pad mode it offers: wide enough for "Touchpad" at the largest text the layout allows for. */
+private val PAD_MODE_WIDTH = 110.dp
 
 /**
- * Switch between the D-pad and the touchpad. The selected side is raised rather than teal: teal is
- * kept for OK, the thing to press, and this is only a setting.
+ * Switch between the pads in [modes]. The selected one is raised rather than teal: teal is kept for
+ * OK, the thing to press, and this is only a setting.
  */
 @Composable
-private fun PadModeToggle(selected: PadMode, onSelect: (PadMode) -> Unit) {
+private fun PadModeToggle(selected: PadMode, modes: List<PadMode>, proOn: PadMode? = null, onSelect: (PadMode) -> Unit) {
     Row(
         modifier = Modifier
-            .width(240.dp)
+            .widthIn(max = PAD_MODE_WIDTH * modes.size + 20.dp)
+            .fillMaxWidth()
             .clip(CircleShape)
             .background(MaterialTheme.colorScheme.surfaceVariant)
             .padding(3.dp),
     ) {
-        PadMode.entries.forEach { mode ->
+        modes.forEach { mode ->
             val active = mode == selected
             Box(
                 modifier = Modifier
@@ -949,18 +1162,22 @@ private fun PadModeToggle(selected: PadMode, onSelect: (PadMode) -> Unit) {
                     .padding(vertical = 9.dp),
                 contentAlignment = Alignment.Center
             ) {
-                Text(
-                    mode.label,
-                    color = if (active) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.onSurfaceVariant,
-                    style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.Medium)
-                )
+                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    Text(
+                        mode.label,
+                        color = if (active) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.onSurfaceVariant,
+                        style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.Medium),
+                        maxLines = 1,
+                        // On a narrow phone the PRO chip leaves too little room; the word gives way, not the chip
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.weight(1f, fill = false)
+                    )
+                    if (mode == proOn) ProChip()
+                }
             }
         }
     }
 }
-
-/** Distance dragged, in dp, that counts as one D-pad step. */
-private const val SWIPE_STEP_DP = 40
 
 /** How long an edge arrow stays lit after the last step its way: long enough to see, gone soon after the finger stops. */
 private const val STEP_FLASH_MS = 160L
@@ -969,14 +1186,14 @@ private const val STEP_FLASH_MS = 160L
 private val TOUCHPAD_GRID = 22.dp
 
 /**
- * A surface that turns swipes into D-pad presses (one per [SWIPE_STEP_DP] dragged, so a long swipe
+ * A surface that turns swipes into D-pad presses (one per [SCROLL_STEP_DP] dragged, so a long swipe
  * keeps scrolling) and a tap into OK. A soft dot follows the finger, and the arrow at the matching
  * edge lights up for each step sent, so the user can see what the TV is being told without looking
  * for it on the TV. Nothing moves unless a finger is down.
  */
 @Composable
 private fun Touchpad(onKey: (TvKey, KeyAction) -> Unit, enabled: Boolean, modifier: Modifier = Modifier) {
-    val stepPx = with(LocalDensity.current) { SWIPE_STEP_DP.dp.toPx() }
+    val stepPx = with(LocalDensity.current) { SCROLL_STEP_DP.dp.toPx() }
     val currentOnKey by rememberUpdatedState(onKey)
     val view = LocalView.current
     val teal = MaterialTheme.colorScheme.primary
@@ -1048,9 +1265,29 @@ private fun Touchpad(onKey: (TvKey, KeyAction) -> Unit, enabled: Boolean, modifi
             }
             .pointerInput(enabled) {
                 if (!enabled) return@pointerInput
-                detectTapGestures(onTap = {
-                    view.performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP)
-                    currentOnKey(TvKey.OK, KeyAction.TAP)
+                // Same rule as RemoteKey: a short touch is OK, held past HOLD_THRESHOLD_MS it is a long OK
+                // (the TV's context menu). A swipe cancels the press, so moving never sends either.
+                detectTapGestures(onPress = {
+                    var held = false
+                    try {
+                        val released = withTimeoutOrNull(HOLD_THRESHOLD_MS) { tryAwaitRelease() }
+                        when (released) {
+                            true -> {
+                                view.performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP)
+                                currentOnKey(TvKey.OK, KeyAction.TAP)
+                            }
+                            null -> {
+                                view.performHapticFeedback(HapticFeedbackConstants.LONG_PRESS)
+                                currentOnKey(TvKey.OK, KeyAction.LONG_START)
+                                held = true
+                                tryAwaitRelease()
+                            }
+                            false -> Unit
+                        }
+                    } finally {
+                        // Also runs if cancelled mid-hold, so the TV never keeps OK held down
+                        if (held) currentOnKey(TvKey.OK, KeyAction.LONG_END)
+                    }
                 })
             }
             .pointerInput(enabled) {
@@ -1083,9 +1320,12 @@ private fun Touchpad(onKey: (TvKey, KeyAction) -> Unit, enabled: Boolean, modifi
         EdgeArrow(Icons.AutoMirrored.Filled.KeyboardArrowLeft, lit == TvKey.LEFT, Modifier.align(Alignment.CenterStart))
         EdgeArrow(Icons.AutoMirrored.Filled.KeyboardArrowRight, lit == TvKey.RIGHT, Modifier.align(Alignment.CenterEnd))
         Text(
-            "Swipe to move · tap for OK",
+            "Swipe to move · tap for OK\nHold OK for options",
             color = MaterialTheme.colorScheme.onSurfaceVariant,
-            style = MaterialTheme.typography.bodyMedium
+            style = MaterialTheme.typography.bodyMedium,
+            textAlign = TextAlign.Center,
+            // Clear of the edge arrows, which sit 12dp in and 28dp wide
+            modifier = Modifier.padding(horizontal = 52.dp)
         )
     }
 }
@@ -1173,7 +1413,7 @@ private fun RemoteKey(
  * ringed in teal while [held]. Shrinking is quick and the spring back slower, so a fast tap still shows.
  */
 @Composable
-private fun KeySurface(
+internal fun KeySurface(
     enabled: Boolean,
     pressed: Boolean,
     held: Boolean,
@@ -1218,11 +1458,38 @@ private val previewState = RemoteUiState(
 )
 
 @Composable
-private fun RemotePreview(uiState: RemoteUiState = previewState, padMode: PadMode = PadMode.DPAD, showHoldTip: Boolean = false) {
+private fun RemotePreview(
+    uiState: RemoteUiState = previewState,
+    padMode: PadMode = PadMode.DPAD,
+    showHoldTip: Boolean = false,
+    airOffer: AirOffer = AirOffer(inSwitch = uiState.airMouse.linked)
+) {
     AirMouseTVRemoteTheme {
-        RemoteContent(uiState, "Living Room TV", padMode, {}, showHoldTip, {}, { _, _ -> }, {}, {}, {}, {})
+        RemoteContent(
+            uiState, "Living Room TV", padMode, {}, AirPadActions(), airOffer, {}, {}, {}, {},
+            showHoldTip, {}, { _, _ -> }, {}, {}, {}, {}
+        )
     }
 }
+
+private val airMousePreviewState = previewState.copy(
+    airMouse = AirMouseUiState(available = true, linked = true, link = PointerLinkState.READY, hasGyroscope = true)
+)
+
+@Preview(showBackground = true, widthDp = 390, heightDp = 844, name = "Air mouse")
+@Composable
+private fun RemoteAirMousePreview() = RemotePreview(airMousePreviewState, padMode = PadMode.AIR_MOUSE)
+
+@Preview(showBackground = true, widthDp = 390, heightDp = 844, name = "Air mouse: pointer link lost")
+@Composable
+private fun RemoteAirMouseLostPreview() = RemotePreview(
+    airMousePreviewState.copy(airMouse = airMousePreviewState.airMouse.copy(link = PointerLinkState.CONNECTING)),
+    padMode = PadMode.AIR_MOUSE
+)
+
+@Preview(showBackground = true, widthDp = 320, heightDp = 640, name = "Air mouse: narrow screen")
+@Composable
+private fun RemoteAirMouseNarrowPreview() = RemotePreview(airMousePreviewState, padMode = PadMode.AIR_MOUSE)
 
 @Preview(showBackground = true, widthDp = 390, heightDp = 844, name = "D-pad")
 @Composable
@@ -1287,3 +1554,25 @@ private fun YouTubeSearchPreview() = SheetPreview {
         Text("Results open on the TV.", color = MaterialTheme.colorScheme.onSurfaceVariant)
     }
 }
+
+private val airOfferPreviewState = previewState.copy(
+    airMouse = AirMouseUiState(available = true, roleKnown = true, hasGyroscope = true)
+)
+
+@Preview(showBackground = true, widthDp = 390, heightDp = 844, name = "Air mouse offered: PRO chip, tip, menu dot")
+@Composable
+private fun RemoteAirOfferedPreview() = RemotePreview(
+    airOfferPreviewState, airOffer = AirOffer(inSwitch = true, proChip = true, tip = true, menuDot = true)
+)
+
+@Preview(showBackground = true, widthDp = 390, heightDp = 844, name = "Air mouse tapped before setup")
+@Composable
+private fun RemoteAirOfferPadPreview() = RemotePreview(
+    airOfferPreviewState, padMode = PadMode.AIR_MOUSE, airOffer = AirOffer(inSwitch = true, proChip = true)
+)
+
+@Preview(showBackground = true, widthDp = 320, heightDp = 640, name = "Air mouse offered: narrow screen")
+@Composable
+private fun RemoteAirOfferedNarrowPreview() = RemotePreview(
+    airOfferPreviewState, airOffer = AirOffer(inSwitch = true, proChip = true, tip = true)
+)

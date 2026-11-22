@@ -3,7 +3,7 @@
 | | |
 |---|---|
 | **Covers** | A pointer on the TV, moved by pointing the phone, like LG's Magic Remote |
-| **Status** | Proposal. Nothing is built yet. Decided: Bluetooth HID first, companion app only if needed (section 4.2) |
+| **Status** | Option B (Bluetooth HID) is built in the `:airmouse` module, with its pad, settings and setup screens. On a Hisense Android TV 9 the pointer moves, clicks, scrolls and recenters (section 7.9). Not yet tried by hand: pointing by moving the phone. The companion app (A) is not started |
 | **Related** | [Remote design](remote.md) (built) · Stitch "Deep Code" design (Air Mouse screens) |
 
 The remote today drives the TV the way a normal remote does: D-pad steps, OK, and keys. This
@@ -174,28 +174,44 @@ Sections 5 and 8 apply to both options. Sections 6 and 7 cover what's specific t
   adds little lag when moving fast. The setting adjusts its strength.
 - **Dead zone:** angular speeds below a small threshold are ignored, so hand tremor doesn't move
   the cursor.
-- **Clutch:** the cursor moves only while the thumb rests on the pointing area. Lifting the thumb
-  lets the user re-aim the phone without moving the cursor, like lifting a mouse.
-- **Recenter:** a button that puts the cursor back in the middle of the screen.
-- **Calibration:** measures the gyroscope's resting drift while the phone lies still and
-  subtracts it.
+- **No clutch.** The first build moved the cursor only while a thumb rested on the pad. Replaced
+  (November 2026, section 13): with "Air pointing" on, the cursor follows the phone with no finger
+  on the screen.
+- **Freeze:** a finger held on the pad stops the cursor following, so the phone can be brought
+  back to a comfortable position, like lifting a mouse.
+- **Put down:** a phone lying still for 1.5 s pauses, and wakes only when clearly picked up, a
+  moment after the swing of picking it up.
+- **Hold-still around a press:** a tap or a volume button jolts the phone just before it
+  registers. The movement of the last 100 ms is undone on press, and the cursor stays still for
+  100 ms after release.
+- **Wake:** when the link comes up the phone sends one count each way, so the TV shows a cursor it
+  had hidden.
+- **Recenter:** the cursor is pushed into the top-left corner by more than any screen is wide, then
+  walked back to the middle in 4-count steps every 10 ms. Approximate, since a mouse is relative
+  (section 7.9).
+- **Calibration:** measures the gyroscope's resting drift while the phone lies still for 3 s and
+  subtracts it; a phone that moved meanwhile gives no calibration.
 
-All of this math is pure functions in `data/api/`, free of Android like the rest of the protocol
-code, and unit-tested with recorded sensor traces.
+All of this math is pure functions in the `:airmouse` module's `api` package, free of Android like
+the rest of the protocol code, and unit-tested.
 
-### 5.3 Touchpad fallback
+### 5.3 Mouse pad
 
-Dragging on the pointing area moves the cursor like a laptop trackpad, with the same acceleration
-curve. It is the only mode on phones without a gyroscope, and can be chosen on any phone.
+With "Air pointing" off, sliding a finger on the pad moves the cursor like a laptop trackpad,
+with its own acceleration curve. It is the only mode on phones without a gyroscope, and can be
+chosen on any phone.
 
 ### 5.4 Clicks and scroll
 
 | Phone gesture | Action on TV |
 |---|---|
-| Tap the left button (or the pointing area) | Click at the cursor |
-| Hold the left button | Press and hold (drag while held) |
-| Right button | Open question: Back, or long press (context menu). Section 12 |
-| Scroll strip, or two-finger drag | Scroll at the cursor |
+| Tap the pad | Click at the cursor |
+| Vol + (Air pointing on) | Click, held for as long as the button is |
+| Vol − (Air pointing on) | Back, sent over Wi-Fi like the Back key |
+| Air pointing on: drag one finger anywhere on the pad. Air pointing off: two-finger drag, or a strip (up and down on the right edge, left and right along the bottom) | Scroll in any direction. Sent as D-pad keys by default, or as the mouse wheel and its sideways wheel (settings: "Scroll with") |
+
+The volume buttons can be swapped, or left to the TV's volume, in the settings. There is no
+right-click control: Back is the remote's Back key or Vol −.
 
 The D-pad, Back, Home, volume and text entry stay on the existing remote protocol.
 
@@ -304,9 +320,9 @@ hid.connect(tvDevice)                                        // after the one-ti
 hid.sendReport(tvDevice, MOUSE_REPORT_ID, report)            // buttons, dx, dy, wheel
 ```
 
-- **Report descriptor:** a fixed byte table declaring two reports.
-  - Mouse: 3 buttons, relative X and Y (−127…127 each), and a wheel.
-  - Keyboard: modifier byte and up to 6 key codes.
+- **Report descriptor:** a fixed byte table declaring one report: a mouse with 3 buttons,
+  relative X and Y (−127…127 each), and a wheel. The keyboard report planned at first was left
+  out (section 13): Android hides its on-screen keyboard while a hardware keyboard is connected.
 - **Relative movement.** All pointer math (smoothing, dead zone, acceleration, clutch, recenter)
   stays on the phone, in `data/api/` with JVM tests, and only the resulting movement is sent.
   Larger movements are split across several reports.
@@ -326,7 +342,7 @@ hid.sendReport(tvDevice, MOUSE_REPORT_ID, report)            // buttons, dx, dy,
 - **A native pointer.** Its look, hiding after a few seconds idle, and hiding when the D-pad is
   used are all handled by the TV.
 - **Real mouse events.** Most views treat a primary-button click like a tap, and the wheel scrolls
-  lists.
+  lists in apps built for a mouse. Many TV apps scroll by focus instead and handle the wheel badly (7.9).
 - **The right button.** On Android it commonly acts as **Back** when the app doesn't use it. If
   that holds on our TVs, it settles the right-button question in section 12.
 - **Pointer speed.** The TV applies its own pointer speed setting on top of our curve, so the gain
@@ -385,6 +401,58 @@ the share can't be predicted from public data. Therefore:
 **Security:** Bluetooth pairing and its encryption are handled by the system, and only bonded
 devices can send input. No extra protocol or certificates are needed.
 
+### 7.9 Spike findings so far (November 2026)
+
+One session, with a POCO F1 (Android 12, an AOSP build) and a Hisense Android TV 9. Checklist
+item 1 is half done; items 2 to 7 are open.
+
+| Finding | What it means for the app |
+|---|---|
+| The POCO F1 has the HID device role, and `registerApp` succeeds | One Xiaomi-family phone confirmed, on a custom ROM. Says nothing about stock MIUI |
+| **Android takes the role away whenever anything covers the app**, including its own pairing dialog and the "make visible" prompt. The app is unregistered while they show | The role can't be held through pairing. The link asks for it again every 1.5 s until the app is back in front |
+| A TV that pairs while the phone is not registered files it as a generic device (shown with a game pad icon) and never opens the HID connection | After pairing, the phone has to open the connection itself. During setup it offers it to every paired device that isn't a computer or a phone |
+| When the phone opens the connection to a TV that has forgotten it, Android drops the stale pairing and starts a new one. The TV shows its own "Bluetooth pairing request" **without its accessory screen being open** | Pairing can start from the phone. This may remove step 1 of the setup, if the phone can find the TV's Bluetooth address (open question, section 12) |
+| The phone showed that pairing request only as a notification, not a dialog, and it timed out after 30 s | The setup says to look in the notifications |
+| On a second try the TV's "Add accessory" list did not show the phone, although the TV's log shows it received the phone's inquiry response | Not understood yet. The list may filter on device class, which would change with the role being held or not |
+| The remote protocol's link message most likely can't open "Add accessory": that screen is started by an internal action, not a link, and this TV rejects `intent:` links | Not tested on the TV yet. The setup screens carry a D-pad, Back and Home instead, so the user walks there with the app |
+
+**Built on these findings, not yet run on a TV:** on Android 12 and later the setup's first step
+is the phone looking for the TV over Bluetooth (`BLUETOOTH_SCAN`, declared never to be used for
+location). A device found under one of the TV's network names is paired with at once; other
+devices that announce themselves as TVs are offered for the user to pick; computers, phones and
+headphones are never offered. The TV then only has to confirm its pairing request, which the
+setup's own OK key can do. If the TV isn't found, the screen says to open "Add accessory", which
+makes a TV visible. The older way round (the TV finds the phone) stays as a fallback, and is the
+only way before Android 12, where scanning would need the location permission. Still to be
+learned on real TVs: whether they can be found without their accessory screen open, and how often
+the Bluetooth name differs from the network name.
+
+**Second session (15 and 16 November 2026), same phone and TV,** with the phone and TV already
+paired. The link came up within about 3 s each time the pad opened. Measured on the TV (with
+`getevent` on the phone's input device, and screenshots):
+
+| Finding | What it means for the app |
+|---|---|
+| Moves, clicks and wheel notches all arrive. A click's press and release arrive about 1 ms apart, whatever gap the phone leaves between them | The click works anyway. No delay between press and release is needed |
+| The launcher treats the first click on a tile as selecting it, the second as opening it | Two taps open an app from the home screen. Inside apps (SmartTube) one click acts |
+| **The TV accelerates the pointer by its own rule, which varies from run to run.** Slow movement is about 1 pixel per count; the same 960-count walk sent in 12-count steps ended 1.5 to 1.75 times too far | Recenter walks back in 4-count steps every 10 ms, where the TV adds nothing. It lands within about 100 pixels of the middle |
+| After the TV restarted, the app found it by its long network name (`HiSmartTV-A4-…`), and the link saved during setup under its address and friendly name was not found: the air mouse looked unset | The link is now saved and looked up under all of the TV's names (network name, friendly name, address) |
+| SmartTube animates each turn of the wheel, and a turn arriving mid-animation replaces it: single notches a second apart scrolled 128 pixels each, but seven notches in a quick drag scrolled 256 in all. The TV's home screen counts every notch | Wheel turns are spaced at least 250 ms apart and the notches in between sent as one bigger turn. After the fix a quick four-notch drag scrolled SmartTube exactly four notches |
+| Vol − on the phone reached the TV as Back; Vol + as a click; the phone's own volume stayed put | The volume buttons work as designed while pointing |
+| Calibration on a phone lying on a table took about 3 s and measured a drift of about 0.0001 rad/s | This phone's gyroscope already corrects itself; the calibration is for phones that don't |
+
+**Third session (16 November 2026).** After the sideways wheel was added, scrolling with the Bluetooth wheel felt worse in real use on the TV, while the touchpad's D-pad keys scrolled lists smoothly. TV apps are built around focus: a key press moves focus and the app scrolls its own list, whereas a wheel event is handled per app, and some ignore it or drop notches. So scrolling now sends D-pad keys by default and keeps the wheel as a setting. Pairing was not redone before that first test, so part of the difference may have come from the TV still holding the old descriptor; not separated yet.
+
+Not yet tried: pointing by moving the phone, pausing when put down, sideways scrolling in a browser,
+the reconnecting waves (they need the TV out of range), and a first-time setup with the new
+phone-started pairing.
+
+Phones tested for the HID device role:
+
+| Phone | Android | Role available |
+|---|---|---|
+| POCO F1 (AOSP-based custom ROM) | 12 | Yes |
+
 ## 8. Fitting into the existing app
 
 ### 8.1 Mode detection
@@ -413,10 +481,16 @@ remote looks exactly as it does today.
 - **New `AirMouseSession` singleton** that owns the active `PointerSink`, alongside
   `RemoteSessionManager`. Neither depends on the other, so the stock remote is unaffected by air
   mouse failures.
-- **Pointer math in `data/api/`** (filters, gain curve, roll compensation): pure Kotlin, JVM
-  tests.
-- **A sensor source wrapper** in `data/repository/` that registers sensors only while the air
-  mouse screen is showing, and stops on pause.
+- **Its own Gradle module, `:airmouse`.** Everything except the screens lives there: pointer
+  math, the Bluetooth link, the sensor source and `AirMouseSession`. It has no Hilt and no UI, so
+  it builds and runs its tests without the app's annotation processing, and it can be left out of
+  a build, or gated, when the air mouse becomes a paid feature. The app provides the session
+  through `di/AirMouseModule`. The pad and setup screens stay in `app`, next to the theme and key
+  widgets they share with the remote.
+- **Pointer math in the module's `api` package** (filters, gain curve, roll compensation): pure
+  Kotlin, JVM tests.
+- **A sensor source wrapper** in its `repository` package that registers sensors only while the
+  air mouse is showing, and stops on pause.
 - `RemoteViewModel` gains air mouse state in `RemoteUiState`, following the one-state pattern.
 
 ### 8.3 Navigation
@@ -473,7 +547,10 @@ revisiting the no-Navigation decision, together with the UI overhaul.
 
 - Whether A is needed after all, judged against the criteria in section 4.2 once the spike and
   first users' diagnostics are in.
-- What the right button does: Back, or long press.
+- Whether phone-started pairing (section 7.9) works on real TVs well enough to drop the "TV
+  finds the phone" fallback and the `BLUETOOTH_ADVERTISE` permission with it.
+- How the gyroscope gain feels by hand, given that the TV adds acceleration of its own (7.9).
+- Pricing for Pro. The air mouse carries a PRO mark, but nothing is charged yet.
 - Whether the live sensor and X/Y readouts from the Stitch screen are for users, or only a debug
   view (for the UI overhaul).
 - How the dashboard's "signal" should be measured: the phone's Wi-Fi strength (A), or Bluetooth
@@ -488,3 +565,16 @@ revisiting the no-Navigation decision, together with the UI overhaul.
 | Oct 2026 | Keys, text, volume and app links stay on the stock protocol | Proven and works without the air mouse |
 | Nov 2026 | Build Bluetooth HID (B) first; build the companion app (A) only if the criteria in section 4.2 are met | B avoids a TV app and the accessibility policy risk; the shared work keeps A cheap to add later |
 | Nov 2026 | Pointer output goes through a `PointerSink` interface | Lets A be added beside B without changing the pointer model or UI, and allows JVM tests with a fake |
+| Nov 2026 | The phone is a Bluetooth mouse only, not a keyboard too | A keyboard in the descriptor makes Android TV treat the phone as a hardware keyboard and hide its on-screen keyboard. The cost: adding the keyboard later (7.5) means pairing again |
+| Nov 2026 | The air mouse lives in its own module, `:airmouse`; its screens stay in the app | Fast to build and test by itself, and separable for a paid feature. Moving the screens too would need a shared UI module first |
+| Nov 2026 | The setup screens carry remote keys | The setup must not need the TV's own remote |
+| Nov 2026 | One pad with an "Air pointing" switch, no rest-your-thumb clutch, no Click or Right keys; tap to click, Vol + clicks and Vol − is Back while pointing; Recenter is the one key. Hold to freeze was dropped (the pointer still holds still while a finger is down, since landing jolts the phone) | Pointing shouldn't need a thumb parked on the screen, and the click belongs where the hand already is |
+| Nov 2026 | The air mouse is shown to everyone as a Pro feature, but only on phones known to have the Bluetooth mouse role | Nobody should be offered it and then told the phone can't do it |
+| Nov 2026 | No paywall yet: the PRO mark is shown, the price line is left out | Pricing is not decided |
+| Nov 2026 | The Air pointing switch is an icon key beside Recenter, off the pad; a one-time line explains it | A tap on the pad can never flip it, and the pad keeps its room. It needs the hint and an accessibility label because it has no text |
+| Nov 2026 | Scrolling works in any direction. With Air pointing on, one finger dragged anywhere on the pad scrolls (the pointer needs no finger, and two fingers or an edge strip were hit and miss while holding the phone in the air). As a mouse pad a finger moves the pointer, so it keeps two fingers and strips on the right edge and along the bottom | Sideways scrolling needs the sideways wheel (AC Pan) in the HID descriptor, so every TV paired before it was added has to pair again |
+| Nov 2026 | Scrolling sends D-pad keys by default; the mouse wheel is a setting ("Scroll with") | On the Hisense Android TV 9 the touchpad's keys scroll lists smoothly in every app, while the wheel is dropped or ignored by some (7.9). The wheel stays for browsers and maps |
+| Nov 2026 | App icon L3b: a TV with the pointer, a tilted remote and two waves, on a flat #161A1F background; adaptive icon with a themed monochrome layer, PNGs for Android 7, a 512 px store icon in `docs/store/` | Chosen from the canvas. `docs/design/render-icon.ps1` redraws the PNGs from the same geometry as the vector |
+| Nov 2026 | Swiping or two-finger scrolling on the pad goes the touchpad's way: fingers down scroll down (the Down key, or the wheel down), fingers right scroll right | The pad and the touchpad had opposite directions. The strips already agreed with the touchpad |
+| Nov 2026 | The Bluetooth link stays up while the app is in front, for a TV that has been set up on a phone with the mouse role, whichever mode is showing, and for 60 s after the app goes to the background; only the sensors are tied to the pad | Switching from the D-pad or touchpad back to the air mouse reconnected every time, about 3 s. An open link that sends nothing costs little; the gyroscope is what costs battery. Not intermittent, since waking a sleeping link is the wait we want to remove. Released after the grace period because Android may hand the role to another app and nobody is looking at ours |
+| Nov 2026 | The pad's hint is a short list low on the pad, in regular weight and muted, one icon per row (air pointing: Move the phone to point, Tap to click, Swipe to scroll, and a fainter "Pauses when the phone is put down"; mouse pad: Slide to move, Tap to click, Two fingers or the strips to scroll). After 3 launches the air pointing list shrinks to one faint line, "Tap to click · swipe to scroll" | The centred bold sentence was crowded and read like a heading. The gestures are learned quickly, so the list needn't stay |

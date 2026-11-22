@@ -69,6 +69,16 @@ private const val UNPINGED_READ_TIMEOUT_MS = 90_000
 /** Shorter timeout for the pre-connect reachability probe, so an off TV is reported quickly. */
 private const val REACHABILITY_TIMEOUT_MS = 1500
 
+/** What a connection attempt to a TV's remote and pairing ports found. */
+enum class HostProbe {
+    /** A port accepted the connection. */
+    OPEN,
+    /** The address answered but nothing listens: the TV is on the network and its service isn't up. */
+    REFUSED,
+    /** No answer: switched off, left the network, or unreachable. */
+    UNREACHABLE
+}
+
 /**
  * Polo pairing over TLS on port 6467:
  *   C PairingRequest -> S PairingRequestAck
@@ -212,21 +222,33 @@ class RemoteSessionManager @Inject constructor(
      * TLS connect. A plain TCP connect to both ports in parallel; true if either accepts within
      * [REACHABILITY_TIMEOUT_MS]. A TV that is off or asleep times out or refuses on both.
      */
-    suspend fun isReachable(host: String): Boolean = coroutineScope {
-        listOf(REMOTE_PORT, PAIRING_PORT)
+    suspend fun isReachable(host: String): Boolean = probeHost(host) == HostProbe.OPEN
+
+    /**
+     * Like [isReachable], but tells a TV that is on the network with its remote service not up yet
+     * ([HostProbe.REFUSED]: the TV answers, saying nothing listens) from one that doesn't answer at all.
+     * A Hisense Android TV 9 was seen taking ~7 minutes after a restart before the service came up.
+     */
+    suspend fun probeHost(host: String): HostProbe = coroutineScope {
+        val results = listOf(REMOTE_PORT, PAIRING_PORT)
             .map { port ->
                 async(Dispatchers.IO) {
                     try {
                         Socket().use { it.connect(InetSocketAddress(host, port), REACHABILITY_TIMEOUT_MS) }
-                        true
+                        HostProbe.OPEN
                     } catch (e: Exception) {
                         Log.d(TAG, "Port $port on $host not reachable: ${e.message}")
-                        false
+                        if (e.message?.contains("refused", ignoreCase = true) == true) HostProbe.REFUSED
+                        else HostProbe.UNREACHABLE
                     }
                 }
             }
             .awaitAll()
-            .any { it }
+        when {
+            HostProbe.OPEN in results -> HostProbe.OPEN
+            HostProbe.REFUSED in results -> HostProbe.REFUSED
+            else -> HostProbe.UNREACHABLE
+        }
     }
 
     /**
