@@ -266,6 +266,9 @@ class AirMouseSession private constructor(
     /** Starts pairing with the device at [address], one the search found and the user picked. Call from the main thread. */
     fun pairWith(address: String) = hidSink.pairWith(address)
 
+    /** Looks for the TV again after the setup's search ran out. Call from the main thread. */
+    fun retrySearch() = hidSink.retrySearch()
+
     /**
      * A finger came down on the pad or a button (true), or left it. While it is down the pointer
      * doesn't follow the phone, and the jolt of it landing is undone, so a click that follows

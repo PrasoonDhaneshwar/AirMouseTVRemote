@@ -70,6 +70,24 @@ class NearbyTvTest {
         assertFalse(matchesTvName("—", listOf("…")))
     }
 
+    // ----- Paired devices that may be the TV -----
+
+    @Test
+    fun `a paired device is the TV if it has the TV's name or announces itself as one`() {
+        assertTrue(looksLikePairedTv("Living Room TV", 0x0404, tvNames))
+        assertTrue(looksLikePairedTv(null, 0x043C, tvNames))
+        assertTrue(looksLikePairedTv("Something else", 0x2C043C, tvNames))
+    }
+
+    @Test
+    fun `headphones, speakers and unclassified devices are not offered the mouse connection`() {
+        // The classes seen on a phone with 14 paired devices, one of them the TV (0x043C)
+        for (other in listOf(0x0404, 0x0414, 0x0408, 0x0420, 0x0540, 0x1F00)) {
+            assertFalse(looksLikePairedTv("Headphones", other, tvNames))
+        }
+        assertFalse(looksLikePairedTv(null, null, tvNames))
+    }
+
     // ----- Who to offer, and who to pair with unasked -----
 
     @Test

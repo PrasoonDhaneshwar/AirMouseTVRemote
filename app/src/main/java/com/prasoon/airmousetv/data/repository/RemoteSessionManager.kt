@@ -63,7 +63,7 @@ private const val TRUSTED_CHECK_TIMEOUT_MS = 10_000L
 /** No bytes from the TV for this long on the remote connection means it is gone; most TVs ping every ~5 s, but a waipu stick went quiet for over 15 s. */
 private const val REMOTE_READ_TIMEOUT_MS = 40_000
 /** How many recent events [RemoteSessionManager.diagnosticsReport] keeps. */
-private const val MAX_DIAGNOSTIC_LINES = 60
+private const val MAX_DIAGNOSTIC_LINES = 120
 /** Silence allowed on a remote connection whose TV hasn't pinged yet, so quiet sticks aren't dropped while idle. */
 private const val UNPINGED_READ_TIMEOUT_MS = 90_000
 /** Shorter timeout for the pre-connect reachability probe, so an off TV is reported quickly. */

@@ -501,9 +501,10 @@ class RemoteViewModel @Inject constructor(
     private fun openRemote(tv: DiscoveredTv) {
         val codeWasTyped = _uiState.value.awaitingCode
         if (codeWasTyped) _uiState.value = _uiState.value.copy(paired = true, error = null)
-        // A TV paired for the first time is the moment to say the air mouse exists: once, and only on a
-        // phone known to be able to do it. The screen then waits for an answer instead of moving on
-        val offerAirMouse = codeWasTyped && airMouse.hasMouseRole == true &&
+        // A TV paired for the first time is the moment to say the air mouse exists: once, and unless the
+        // phone is known to be unable to do it. (Unknown is offered: a new install can't find out
+        // before it has the Bluetooth permission.) The screen then waits for an answer instead of moving on
+        val offerAirMouse = codeWasTyped && airMouse.available && airMouse.hasMouseRole != false &&
             !airMouse.offeredAfterPairing && !airMouse.isLinked(tv.airMouseKeys)
         if (offerAirMouse) {
             airMouse.offeredAfterPairing = true
@@ -530,12 +531,12 @@ class RemoteViewModel @Inject constructor(
                 available = airMouse.available,
                 linked = airMouse.isLinked(tv.airMouseKeys),
                 hasGyroscope = airMouse.hasGyroscope,
-                roleKnown = airMouse.hasMouseRole == true,
+                roleMissing = airMouse.hasMouseRole == false,
                 settings = airMouse.settings
             )
         )
         // Finding out asks the user nothing; on a phone where it is known already this returns at once
-        airMouse.findOutMouseRole { has -> updateAirMouse { it.copy(roleKnown = has) } }
+        airMouse.findOutMouseRole { has -> updateAirMouse { it.copy(roleMissing = !has) } }
         // The session may have dropped while the tick was showing, when no remote was there to notice
         if (remoteSession.connectionState.value == ConnectionState.Disconnected) startReconnect(tv)
     }
@@ -793,6 +794,12 @@ class RemoteViewModel @Inject constructor(
                 updateAirMouse {
                     it.copy(
                         link = link,
+                        // What a real attempt to take the role found out settles the question either way
+                        roleMissing = when (link) {
+                            PointerLinkState.UNSUPPORTED -> true
+                            PointerLinkState.NEEDS_PAIRING, PointerLinkState.READY -> false
+                            else -> it.roleMissing
+                        },
                         linked = tv != null && airMouse.isLinked(tv.airMouseKeys),
                         setup = it.setup?.let { step -> if (airSetupBegun) nextSetupStep(step, link) else step }
                     )
@@ -810,6 +817,9 @@ class RemoteViewModel @Inject constructor(
 
     /** Starts pairing with the device at [address], one the setup's search found and the user picked as their TV. */
     fun pairAirMouseWith(address: String) = airMouse.pairWith(address)
+
+    /** Searches for the TV again, once the setup's search has run out and the user has had a chance to restart the TV. */
+    fun retryAirMouseSearch() = airMouse.retrySearch()
 
     private fun updateAirMouse(change: (AirMouseUiState) -> AirMouseUiState) {
         _uiState.value = _uiState.value.copy(airMouse = change(_uiState.value.airMouse))

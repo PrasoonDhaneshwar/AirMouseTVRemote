@@ -222,9 +222,10 @@ fun RemoteScreen(viewModel: RemoteViewModel) {
     }
 
     val airMouse = uiState.airMouse
-    // The air mouse is advertised (its place in the mode switch, the tip, the dot on the menu) only on
-    // a phone known to have the Bluetooth mouse role, so nobody is offered it and then told it can't work
-    val airOffered = airMouse.available && airMouse.roleKnown && !airMouse.linked
+    // The air mouse is advertised (its place in the mode switch, the tip, the dot on the menu) unless the
+    // phone is known to lack the Bluetooth mouse role. Unknown counts as present, so a fresh install,
+    // which can't find out before it has the Bluetooth permission, still gets the offer
+    val airOffered = airMouse.available && !airMouse.roleMissing && !airMouse.linked
     var airTipSeen by rememberSaveable { mutableStateOf(uiPrefs.getBoolean(PREF_AIR_TIP_SEEN, false)) }
     var airMenuSeen by rememberSaveable { mutableStateOf(uiPrefs.getBoolean(PREF_AIR_MENU_SEEN, false)) }
     val dismissAirTip = {
@@ -1556,7 +1557,7 @@ private fun YouTubeSearchPreview() = SheetPreview {
 }
 
 private val airOfferPreviewState = previewState.copy(
-    airMouse = AirMouseUiState(available = true, roleKnown = true, hasGyroscope = true)
+    airMouse = AirMouseUiState(available = true, hasGyroscope = true)
 )
 
 @Preview(showBackground = true, widthDp = 390, heightDp = 844, name = "Air mouse offered: PRO chip, tip, menu dot")
