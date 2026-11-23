@@ -172,6 +172,12 @@ class BluetoothHidSink(
     fun probeRole(onKnown: (Boolean) -> Unit) {
         val bluetooth = adapter
         if (!supported || bluetooth == null) return onKnown(false)
+        // Reading whether Bluetooth is on already needs the permission, which a new install lacks until
+        // the setup asks for it. The role then stays unknown, and the air mouse is offered all the same
+        if (!hasPermission()) {
+            Log.i(TAG, "Mouse role probe skipped: no Bluetooth permission yet")
+            return
+        }
         val main = Handler(Looper.getMainLooper())
         var answered = false
         val answer = { has: Boolean ->

@@ -49,8 +49,12 @@ data class AirMouseUiState(
     val setup: AirMouseSetupStep? = null,
     /** The name the TV lists this phone under while pairing, or null if it isn't known. */
     val phoneName: String? = null,
-    /** True once this phone is known to have the Bluetooth mouse role, which is when the air mouse may be advertised to the user. */
-    val roleKnown: Boolean = false,
+    /**
+     * True once this phone is known to lack the Bluetooth mouse role, which is the only time the air mouse
+     * isn't advertised. Unknown counts as present: finding out needs the Bluetooth permission, which a new
+     * install doesn't have yet, and the setup's own first step finds out for certain.
+     */
+    val roleMissing: Boolean = false,
     val settings: AirMouseSettings = AirMouseSettings(),
     /** True while the gyroscope is being calibrated and the phone has to lie still. */
     val calibrating: Boolean = false,
