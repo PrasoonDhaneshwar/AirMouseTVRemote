@@ -818,6 +818,9 @@ class RemoteViewModel @Inject constructor(
     /** Starts pairing with the device at [address], one the setup's search found and the user picked as their TV. */
     fun pairAirMouseWith(address: String) = airMouse.pairWith(address)
 
+    /** Searches for the TV again, once the setup's search has run out and the user has had a chance to restart the TV. */
+    fun retryAirMouseSearch() = airMouse.retrySearch()
+
     private fun updateAirMouse(change: (AirMouseUiState) -> AirMouseUiState) {
         _uiState.value = _uiState.value.copy(airMouse = change(_uiState.value.airMouse))
     }

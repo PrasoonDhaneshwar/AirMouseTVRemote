@@ -17,6 +17,7 @@ import android.content.pm.PackageManager
 import android.os.Build
 import android.os.Handler
 import android.os.Looper
+import android.os.SystemClock
 import android.util.Log
 import androidx.annotation.RequiresApi
 import androidx.core.content.ContextCompat
@@ -27,6 +28,8 @@ import com.prasoon.airmousetv.airmouse.api.HidRegistration
 import com.prasoon.airmousetv.airmouse.api.PointerSink
 import com.prasoon.airmousetv.airmouse.api.hidLinkState
 import com.prasoon.airmousetv.airmouse.api.isTvClass
+import com.prasoon.airmousetv.airmouse.api.looksLikePairedTv
+import com.prasoon.airmousetv.airmouse.api.matchesTvName
 import com.prasoon.airmousetv.airmouse.api.tvCandidates
 import com.prasoon.airmousetv.airmouse.api.tvToPairUnasked
 import com.prasoon.airmousetv.airmouse.model.NearbyDevice
@@ -60,6 +63,15 @@ private const val CONNECT_AFTER_BOND_MS = 2000L
  * is tried. A device that takes mice answers within a second or two; one that is off never does.
  */
 private const val CANDIDATE_TIMEOUT_MS = 6000L
+
+/**
+ * A connection the just-paired TV closes within this long of being asked for is taken as refused, not
+ * as a TV that is slow to answer. The refusals measured came within a second.
+ */
+private const val INSTANT_DROP_MS = 3000L
+
+/** How many times setup gives the mouse role up and takes it again for a TV that keeps dropping the connection. */
+private const val MAX_ROLE_RETAKES = 2
 
 /** How often the mouse role is asked for again after Android took it away, until the app is back in front and gets it. */
 private const val REREGISTER_DELAY_MS = 1500L
@@ -209,6 +221,11 @@ class BluetoothHidSink(
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) link?.pairWith(address)
     }
 
+    /** Searches for the TV again after the setup's search ran out. */
+    fun retrySearch() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) link?.retrySearch()
+    }
+
     override suspend fun move(dx: Float, dy: Float) = send(mouse.move(dx, dy))
 
     override suspend fun button(button: PointerButton, down: Boolean) = send(listOfNotNull(mouse.button(button, down)))
@@ -249,6 +266,9 @@ private class HidLink(
         runCatching { adapter.getRemoteDevice(address) }.getOrNull()
     }
     @Volatile private var connected = false
+
+    /** How many times the known TV has been asked to connect since the link last came up; keeps the report short. */
+    private var connectTries = 0
     private var registration = HidRegistration.PENDING
     private var closed = false
 
@@ -281,8 +301,22 @@ private class HidLink(
     private var searching = false
     private var searchRounds = 0
 
+    /** True once a search has run out without pairing; cleared when another starts. See [TvSearch.over]. */
+    private var searchOver = false
+
     /** During setup: the device a pairing has been started with and not yet finished or failed. */
     private var pairing: BluetoothDevice? = null
+
+    /** During setup: the device that paired most recently, whoever started it. It is the likeliest TV, so it is offered the connection first. */
+    private var justBonded: BluetoothDevice? = null
+
+    /** During setup: the device last asked to take the mouse connection, and when (see [droppedAtOnce]). */
+    private var askedDevice: BluetoothDevice? = null
+    private var askedAtMs = 0L
+
+    /** How many times the mouse role has been given up and taken again because a just-paired TV dropped the connection at once. */
+    private var roleRetakes = 0
+    private var retakingRole = false
 
     private val profileListener = object : BluetoothProfile.ServiceListener {
         override fun onServiceConnected(profile: Int, proxy: BluetoothProfile) {
@@ -314,7 +348,8 @@ private class HidLink(
             } else if (heldBefore) {
                 connected = false
                 registration = HidRegistration.PENDING
-                note("HID device role taken away; asking again")
+                note(if (retakingRole) "HID device role given up on purpose; taking it again" else "HID device role taken away; asking again")
+                retakingRole = false
                 main.removeCallbacks(register)
                 main.postDelayed(register, REREGISTER_DELAY_MS)
             } else {
@@ -326,10 +361,11 @@ private class HidLink(
 
         override fun onConnectionStateChanged(device: BluetoothDevice, state: Int) {
             if (closed) return
+            note("Mouse connection ${connectionName(state)}: ${describe(device)}, ${if (device == target) "the TV" else if (target == null) "no TV known yet" else "not the TV"}")
             when (state) {
                 BluetoothProfile.STATE_CONNECTED -> {
                     if (target == null && !mayBeTv(device)) {
-                        note("Mouse connection from a computer or phone turned away")
+                        note("Mouse connection from a computer or phone turned away: ${describe(device)}")
                         hid?.disconnect(device)
                     } else if (target == null) {
                         main.removeCallbacks(nextCandidate)
@@ -344,6 +380,7 @@ private class HidLink(
                     if (device == target) {
                         main.removeCallbacks(reconnect)
                         connected = true
+                        connectTries = 0
                         dropped.set(0)
                         note("Pointer link up")
                     }
@@ -355,6 +392,8 @@ private class HidLink(
                     mouse.reset()
                     main.removeCallbacks(reconnect)
                     main.postDelayed(reconnect, RECONNECT_DELAY_MS)
+                } else if (target == null && registration == HidRegistration.REGISTERED && droppedAtOnce(device)) {
+                    retakeRole()
                 }
             }
             publish()
@@ -379,13 +418,22 @@ private class HidLink(
                 }
                 BluetoothDevice.ACTION_BOND_STATE_CHANGED -> {
                     val device = deviceIn(intent) ?: return
-                    when (intent.getIntExtra(BluetoothDevice.EXTRA_BOND_STATE, -1)) {
+                    val bondState = intent.getIntExtra(BluetoothDevice.EXTRA_BOND_STATE, -1)
+                    note(
+                        "Bond ${bondName(bondState)}: ${describe(device)}; role $registration, " +
+                            (if (device == target) "the TV" else if (device == pairing) "the device being paired" else "other")
+                    )
+                    if (bondState == BluetoothDevice.BOND_BONDED && target == null && mayBeTv(device)) justBonded = device
+                    when (bondState) {
                         // The device that has just paired is the likeliest TV, so it goes to the front
                         BluetoothDevice.BOND_BONDED -> if (target == null && registration == HidRegistration.REGISTERED) {
                             candidates.remove(device)
                             candidates.addFirst(device)
                             main.removeCallbacks(nextCandidate)
                             main.postDelayed(nextCandidate, CONNECT_AFTER_BOND_MS)
+                        } else if (target == null) {
+                            // Paired while Android's dialog had the role: the offer waits for the role to come back
+                            note("Bonded without the mouse role; the connection is offered when it is back")
                         }
                         BluetoothDevice.BOND_NONE -> when (device) {
                             target -> unlink("TV pairing removed")
@@ -405,13 +453,27 @@ private class HidLink(
                     if (!mayBeTv(device)) return
                     val name = intent.getStringExtra(BluetoothDevice.EXTRA_NAME) ?: device.name
                     val looksLikeTv = device.bluetoothClass?.let { isTvClass(it.deviceClass) } == true
+                    // Said once per device: a scan reports the same one over and over
+                    if (device.address !in found) {
+                        note(
+                            "Found nearby: ${describe(device)}; the TV's name: ${matchesTvName(name, tvNames)}, " +
+                                "looks like a TV: $looksLikeTv, already paired: ${device.bondState == BluetoothDevice.BOND_BONDED}"
+                        )
+                    }
                     found[device.address] = NearbyDevice(device.address, name, looksLikeTv)
                     // The one device carrying the TV's name needs no question asked
                     if (searching) tvToPairUnasked(found.values.toList(), tvNames)?.let { pairWith(it.address) }
                     publishSearch()
                 }
                 BluetoothAdapter.ACTION_DISCOVERY_FINISHED -> if (searching) {
-                    if (++searchRounds < MAX_SEARCH_ROUNDS) adapter.startDiscovery() else searching = false
+                    val another = ++searchRounds < MAX_SEARCH_ROUNDS && adapter.startDiscovery()
+                    if (!another) {
+                        // Out of rounds, or Android won't start another (it limits how often): either way the search is over
+                        searching = false
+                        searchOver = true
+                        note("Search over after $searchRounds rounds; ${found.size} devices seen, none paired with")
+                        publishSearch()
+                    }
                 }
             }
             publish()
@@ -438,6 +500,9 @@ private class HidLink(
         ContextCompat.registerReceiver(context, receiver, filter, ContextCompat.RECEIVER_EXPORTED)
         if (adapter.isEnabled) requestProfile()
         publish()
+        // During setup the screen needs to know at once whether the phone looks for the TV itself, not
+        // only once the paired devices have been tried
+        if (target == null) publishSearch()
     }
 
     /** Asks Android for the mouse role. The answer comes through onAppStatusChanged. */
@@ -482,10 +547,40 @@ private class HidLink(
      */
     private fun offerToPairedDevices() {
         candidates.clear()
-        adapter.bondedDevices.orEmpty().filterTo(candidates, ::mayBeTv)
-        // A device the user has just paired with on purpose is tried before older pairings
-        pairing?.let { candidates.remove(it); candidates.addFirst(it) }
+        val bonded = adapter.bondedDevices.orEmpty()
+        // Only those that look like the TV: a phone paired with headphones, speakers and a car would
+        // otherwise spend 6 s on each before the search even starts (78 s with 13 devices, measured)
+        bonded.filterTo(candidates) { mayBeTv(it) && looksLikePairedTv(it.name, it.bluetoothClass?.deviceClass, tvNames) }
+        // The device that has just paired is tried before older pairings, whoever started the pairing
+        listOfNotNull(justBonded, pairing).forEach { fresh ->
+            if (mayBeTv(fresh) && fresh in bonded) { candidates.remove(fresh); candidates.addFirst(fresh) }
+        }
+        note("Offering the mouse connection: ${candidates.size} of ${bonded.size} paired devices look like the TV")
         offerToNextCandidate()
+    }
+
+    /**
+     * A device for a bug report: the end of its address and its Bluetooth class, which decides whether
+     * it can be taken for the TV. Its name is left out, since reports get pasted into public places.
+     */
+    private fun describe(device: BluetoothDevice): String {
+        val cls = device.bluetoothClass
+        return "…${device.address.takeLast(5)} (class ${cls?.majorDeviceClass?.let { "0x%X".format(it) } ?: "?"}/${cls?.deviceClass?.let { "0x%X".format(it) } ?: "?"})"
+    }
+
+    private fun bondName(state: Int) = when (state) {
+        BluetoothDevice.BOND_NONE -> "none"
+        BluetoothDevice.BOND_BONDING -> "in progress"
+        BluetoothDevice.BOND_BONDED -> "done"
+        else -> "state $state"
+    }
+
+    private fun connectionName(state: Int) = when (state) {
+        BluetoothProfile.STATE_DISCONNECTED -> "disconnected"
+        BluetoothProfile.STATE_CONNECTING -> "connecting"
+        BluetoothProfile.STATE_CONNECTED -> "connected"
+        BluetoothProfile.STATE_DISCONNECTING -> "disconnecting"
+        else -> "state $state"
     }
 
     /**
@@ -502,14 +597,47 @@ private class HidLink(
         if (closed || target != null || registration != HidRegistration.REGISTERED) return
         val candidate = candidates.removeFirstOrNull() ?: run {
             // Nobody the phone is paired with took the connection: look for the TV instead
+            note("No paired device took the mouse connection; searching instead")
             pairing = null
             startSearch()
             publishSearch()
             return
         }
-        device.connect(candidate)
+        askedDevice = candidate
+        askedAtMs = SystemClock.elapsedRealtime()
+        val asked = device.connect(candidate)
+        note("Asked ${describe(candidate)} to take the mouse connection (accepted by Bluetooth: $asked); ${candidates.size} more to try")
         main.removeCallbacks(nextCandidate)
         main.postDelayed(nextCandidate, CANDIDATE_TIMEOUT_MS)
+    }
+
+    /**
+     * True if [device], the one that has just paired, closed the mouse connection within
+     * [INSTANT_DROP_MS] of being asked for it, and the role hasn't been retaken too often already.
+     * A TV that was merely slow doesn't answer at all; one that answers with a disconnect at once is
+     * refusing, as seen on a Hisense Android TV 9 whose pairing the TV had started.
+     */
+    private fun droppedAtOnce(device: BluetoothDevice): Boolean =
+        !retakingRole && device == askedDevice && (device == justBonded || device == pairing) &&
+            SystemClock.elapsedRealtime() - askedAtMs < INSTANT_DROP_MS && roleRetakes < MAX_ROLE_RETAKES
+
+    /**
+     * Gives the mouse role up and takes it again, then offers the connection afresh. That is what made
+     * a TV accept it in the run that prompted this: the role was lost to Android's own dialog, regained,
+     * and the very next offer to the same TV went through. [onAppStatusChanged] does the asking again.
+     */
+    private fun retakeRole() {
+        roleRetakes++
+        note("The just-paired TV dropped the mouse connection at once; taking the mouse role again ($roleRetakes of $MAX_ROLE_RETAKES)")
+        main.removeCallbacks(nextCandidate)
+        candidates.clear()
+        retakingRole = true
+        val device = hid
+        if (device == null || !runCatching { device.unregisterApp() }.getOrDefault(false)) {
+            // Nothing to give up, or Android won't let go: carry on with the next device as before
+            retakingRole = false
+            offerToNextCandidate()
+        }
     }
 
     /**
@@ -519,15 +647,30 @@ private class HidLink(
      * the TV, and the TV doesn't need to recognise the phone as an accessory.
      */
     private fun startSearch() {
-        if (!canSearch || closed || target != null || pairing != null || !adapter.isEnabled) return
+        if (!canSearch || closed || target != null || pairing != null || !adapter.isEnabled) {
+            note("Search not started: can search $canSearch, TV known ${target != null}, pairing ${pairing != null}, Bluetooth on ${adapter.isEnabled}")
+            return
+        }
         searching = true
-        if (!adapter.isDiscovering) adapter.startDiscovery()
+        searchOver = false
+        val started = adapter.isDiscovering || adapter.startDiscovery()
+        note("Search started (a scan was already running: ${adapter.isDiscovering}; scan accepted: $started)")
+    }
+
+    /** Looks for the TV again after a search ran out, for a user who has restarted the TV or opened its "add accessory" screen. */
+    fun retrySearch() {
+        if (closed || target != null || pairing != null || !searchOver) return
+        searchRounds = 0
+        found.clear()
+        startSearch()
+        publishSearch()
     }
 
     private fun stopSearch() {
         if (!searching) return
         searching = false
         adapter.cancelDiscovery()
+        note("Search stopped")
     }
 
     /**
@@ -553,7 +696,14 @@ private class HidLink(
     private fun publishSearch() {
         if (closed) return
         val pairingName = pairing?.let { found[it.address]?.name ?: it.name ?: it.address }
-        onSearch(TvSearch(possible = canSearch, candidates = tvCandidates(found.values.toList(), tvNames), pairingWith = pairingName))
+        onSearch(
+            TvSearch(
+                possible = canSearch,
+                candidates = tvCandidates(found.values.toList(), tvNames),
+                pairingWith = pairingName,
+                over = searchOver && !searching && pairing == null
+            )
+        )
     }
 
     /** Opens the mouse connection to the known TV. Does nothing during setup, when no TV is known yet. */
@@ -566,7 +716,9 @@ private class HidLink(
             publish()
             return
         }
-        device.connect(tv)
+        val accepted = device.connect(tv)
+        // Retried every few seconds, so only the first try and then every tenth go in the report
+        if (connectTries++ % 10 == 0) note("Connecting to the TV: ${describe(tv)} (accepted by Bluetooth: $accepted; try $connectTries)")
         // A TV that is off or out of range gives no answer at all, so keep asking while the pad shows
         main.removeCallbacks(reconnect)
         main.postDelayed(reconnect, RECONNECT_DELAY_MS)

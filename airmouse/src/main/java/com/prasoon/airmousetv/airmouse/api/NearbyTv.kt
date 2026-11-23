@@ -29,6 +29,14 @@ fun matchesTvName(deviceName: String?, tvNames: List<String>): Boolean {
 }
 
 /**
+ * True if a device the phone is already paired with could be the TV: it carries one of [tvNames], or
+ * announces itself as a TV or TV stick ([deviceClass], null if unknown). Headphones, speakers and the
+ * rest of a long paired list are not, and offering them the mouse connection costs several seconds each.
+ */
+fun looksLikePairedTv(deviceName: String?, deviceClass: Int?, tvNames: List<String>): Boolean =
+    matchesTvName(deviceName, tvNames) || (deviceClass != null && isTvClass(deviceClass))
+
+/**
  * The devices found nearby that could be the TV, likeliest first: those carrying the TV's name,
  * then others that announce themselves as a TV. Everything else found in a scan (phones, laptops,
  * headphones, nameless beacons) is left out, so the user is never offered a device the pointer

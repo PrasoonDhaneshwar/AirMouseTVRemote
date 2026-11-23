@@ -75,6 +75,12 @@ data class TvSearch(
     val candidates: List<NearbyDevice> = emptyList(),
     /** The name of the device being paired with right now, or null when none is. */
     val pairingWith: String? = null,
+    /**
+     * True once the search has run its course without pairing. The TV is then most likely not answering
+     * (a TV that has been on for hours can stop answering Bluetooth scans until it is restarted), and
+     * the screen says so instead of searching on for ever.
+     */
+    val over: Boolean = false,
 )
 
 /** The steps of the one-time Bluetooth setup, in order. */
