@@ -106,7 +106,8 @@ enum class HostProbe {
  */
 @Singleton
 class RemoteSessionManager @Inject constructor(
-    @ApplicationContext private val context: Context
+    @ApplicationContext private val context: Context,
+    private val networkMonitor: NetworkMonitor
 ) {
 
     /** Where the Polo handshake is; each incoming message is only accepted in its expected phase. */
@@ -143,6 +144,9 @@ class RemoteSessionManager @Inject constructor(
         if (diagnostics.size >= MAX_DIAGNOSTIC_LINES) diagnostics.removeFirst()
         diagnostics.addLast("%tT %s".format(System.currentTimeMillis(), event))
     }
+
+    /** Notes that [what] failed, with the phone's Wi-Fi band and signal, to tell a weak or switched link from a TV problem. */
+    fun noteFailure(what: String) = note("$what; ${networkMonitor.wifiSummary()}")
 
     /** Recent handshake and text-input events, as plain text to paste into a bug report. */
     @Synchronized
@@ -246,7 +250,9 @@ class RemoteSessionManager @Inject constructor(
         val first = probeHost(host)
         if (first != HostProbe.UNREACHABLE) return first == HostProbe.OPEN
         note("no answer from $host, probing once more")
-        return probeHost(host, RETRY_REACHABILITY_TIMEOUT_MS) == HostProbe.OPEN
+        val reachable = probeHost(host, RETRY_REACHABILITY_TIMEOUT_MS) == HostProbe.OPEN
+        if (!reachable) noteFailure("tap check: still no answer from $host")
+        return reachable
     }
 
     /**

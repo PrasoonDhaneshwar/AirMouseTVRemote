@@ -52,6 +52,20 @@ class NetworkMonitor @Inject constructor(
         }
     }
 
+    /** Band, signal and speed of the phone's Wi-Fi link as one line; says so if the phone isn't on Wi-Fi. */
+    @Suppress("DEPRECATION") // connectionInfo is the only way to read the link below API 29
+    fun wifiSummary(): String = try {
+        val onWifi = connectivityManager.getNetworkCapabilities(connectivityManager.activeNetwork)
+            ?.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) == true
+        if (!onWifi) "not on Wi-Fi" else {
+            val info = wifiManager.connectionInfo
+            com.prasoon.airmousetv.data.api.wifiSummary(info?.frequency, info?.rssi, info?.linkSpeed)
+        }
+    } catch (e: Exception) {
+        Log.w(TAG, "Couldn't read the Wi-Fi link", e)
+        "Wi-Fi state unknown"
+    }
+
     /** The phone's IPv4 address on the current network and its prefix length; null if it has none. */
     fun localIpv4(): Pair<ByteArray, Int>? = try {
         val network = connectivityManager.activeNetwork
