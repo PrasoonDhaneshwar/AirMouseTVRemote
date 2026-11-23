@@ -11,6 +11,11 @@ local.properties
 
 .kotlin/
 
+# Release signing details and keys
+keystore.properties
+*.jks
+*.keystore
+
 # Release APKs and raw demo recordings
 *.apk
 docs/*.mp4
