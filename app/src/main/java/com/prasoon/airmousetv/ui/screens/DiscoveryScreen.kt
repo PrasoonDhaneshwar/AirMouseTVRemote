@@ -323,7 +323,7 @@ private fun NothingFound(modifier: Modifier = Modifier) {
         )
         listOf(
             "The TV is switched on",
-            "The phone and TV are on the same Wi-Fi",
+            "The phone and TV are on the same Wi-Fi (if your router has separate 2.4 and 5 GHz networks, use the TV's)",
             "Guest or office Wi-Fi may hide the TV"
         ).forEachIndexed { index, check ->
             HorizontalDivider(color = MaterialTheme.colorScheme.surfaceVariant)
@@ -572,6 +572,6 @@ private fun DiscoveryTvOffNetworkSmallPreview() = DiscoveryPreview(RemoteUiState
 private fun DiscoveryUnreachablePreview() = DiscoveryPreview(
     RemoteUiState(
         discoveredTvs = previewTvs.drop(1),
-        error = "Living Room TV didn't answer, so it was taken off the list. Turn it on, then scan again."
+        error = "Living Room TV didn't answer. Check it's on and on the same Wi-Fi band, then tap it again."
     )
 )

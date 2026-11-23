@@ -68,6 +68,20 @@ private const val MAX_DIAGNOSTIC_LINES = 60
 private const val UNPINGED_READ_TIMEOUT_MS = 90_000
 /** Shorter timeout for the pre-connect reachability probe, so an off TV is reported quickly. */
 private const val REACHABILITY_TIMEOUT_MS = 1500
+/**
+ * Timeout of the second probe after a tap found no answer at all. On a router that splits 2.4 and 5 GHz
+ * a SYN between the bands is sometimes dropped, so a TV that is on fails one probe and passes the next.
+ */
+private const val RETRY_REACHABILITY_TIMEOUT_MS = 3500
+/** TLS handshake timeout when checking that a host found by the subnet sweep is really a TV. */
+private const val TV_CHECK_TIMEOUT_MS = 3000
+
+/**
+ * A pairing port that doesn't answer at all while the remote port does is stuck. A refusal isn't: it
+ * means the service is still starting, which a restart of the TV doesn't help.
+ */
+internal fun pairingPortStuck(remote: HostProbe, pairing: HostProbe): Boolean =
+    remote == HostProbe.OPEN && pairing == HostProbe.UNREACHABLE
 
 /** What a connection attempt to a TV's remote and pairing ports found. */
 enum class HostProbe {
@@ -225,24 +239,63 @@ class RemoteSessionManager @Inject constructor(
     suspend fun isReachable(host: String): Boolean = probeHost(host) == HostProbe.OPEN
 
     /**
+     * [isReachable] for a TV the user just tapped: one silent probe isn't proof it is gone, so a total
+     * lack of answer is retried once with a longer timeout. A refusal is final, since the host did answer.
+     */
+    suspend fun isReachableWithRetry(host: String): Boolean {
+        val first = probeHost(host)
+        if (first != HostProbe.UNREACHABLE) return first == HostProbe.OPEN
+        note("no answer from $host, probing once more")
+        return probeHost(host, RETRY_REACHABILITY_TIMEOUT_MS) == HostProbe.OPEN
+    }
+
+    /**
+     * True if [host] speaks TLS on the remote port, which a TV does and a router that merely accepts
+     * every connection doesn't. A TV that hasn't paired with us answers the handshake with a TLS alert
+     * ("certificate unknown"), which is just as good as success: only a TLS server sends an alert.
+     * Only the remote port is tried. The pairing port serves one client at a time, and a probe left
+     * waiting there has been seen to keep the TV from accepting a real pairing.
+     */
+    suspend fun answersAsTv(host: String): Boolean = withContext(Dispatchers.IO) {
+        try {
+            tls.open(host, REMOTE_PORT, connectTimeoutMs = TV_CHECK_TIMEOUT_MS, handshakeTimeoutMs = TV_CHECK_TIMEOUT_MS) {}.use { true }
+        } catch (e: javax.net.ssl.SSLException) {
+            val tlsAlert = e.message?.contains("alert", ignoreCase = true) == true
+            Log.d(TAG, "$host is ${if (tlsAlert) "" else "not "}a TV: ${e.message}")
+            tlsAlert
+        } catch (e: Exception) {
+            Log.d(TAG, "$host is not a TV: ${e.message}")
+            false
+        }
+    }
+
+    private fun probePort(host: String, port: Int, timeoutMs: Int): HostProbe = try {
+        Socket().use { it.connect(InetSocketAddress(host, port), timeoutMs) }
+        HostProbe.OPEN
+    } catch (e: Exception) {
+        Log.d(TAG, "Port $port on $host not reachable: ${e.message}")
+        if (e.message?.contains("refused", ignoreCase = true) == true) HostProbe.REFUSED
+        else HostProbe.UNREACHABLE
+    }
+
+    /**
+     * True if the TV answers on its remote port but its pairing port goes unanswered. Seen after a phone
+     * vanished mid-pairing: the pairing service serves one client at a time and keeps waiting on the dead one.
+     */
+    suspend fun isPairingPortStuck(host: String): Boolean = coroutineScope {
+        val remote = async(Dispatchers.IO) { probePort(host, REMOTE_PORT, RETRY_REACHABILITY_TIMEOUT_MS) }
+        val pairing = async(Dispatchers.IO) { probePort(host, PAIRING_PORT, RETRY_REACHABILITY_TIMEOUT_MS) }
+        pairingPortStuck(remote.await(), pairing.await())
+    }
+
+    /**
      * Like [isReachable], but tells a TV that is on the network with its remote service not up yet
      * ([HostProbe.REFUSED]: the TV answers, saying nothing listens) from one that doesn't answer at all.
      * A Hisense Android TV 9 was seen taking ~7 minutes after a restart before the service came up.
      */
-    suspend fun probeHost(host: String): HostProbe = coroutineScope {
+    suspend fun probeHost(host: String, timeoutMs: Int = REACHABILITY_TIMEOUT_MS): HostProbe = coroutineScope {
         val results = listOf(REMOTE_PORT, PAIRING_PORT)
-            .map { port ->
-                async(Dispatchers.IO) {
-                    try {
-                        Socket().use { it.connect(InetSocketAddress(host, port), REACHABILITY_TIMEOUT_MS) }
-                        HostProbe.OPEN
-                    } catch (e: Exception) {
-                        Log.d(TAG, "Port $port on $host not reachable: ${e.message}")
-                        if (e.message?.contains("refused", ignoreCase = true) == true) HostProbe.REFUSED
-                        else HostProbe.UNREACHABLE
-                    }
-                }
-            }
+            .map { port -> async(Dispatchers.IO) { probePort(host, port, timeoutMs) } }
             .awaitAll()
         when {
             HostProbe.OPEN in results -> HostProbe.OPEN
