@@ -643,6 +643,7 @@ class RemoteViewModel @Inject constructor(
      * [message] and offering to try the same TV again.
      */
     private fun failConnect(tv: DiscoveredTv, message: String?, removeTv: Boolean) {
+        remoteSession.noteFailure("connect to ${tv.host} failed: ${message ?: "no reason given"}")
         pairingWatchJob?.cancel()
         remoteSession.close()
         if (removeTv) {
