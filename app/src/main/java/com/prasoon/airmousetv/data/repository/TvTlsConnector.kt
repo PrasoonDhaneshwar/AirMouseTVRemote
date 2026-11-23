@@ -54,7 +54,13 @@ internal class TvTlsConnector(private val filesDir: File) {
      * [checkServer] sees the TV's certificate chain and throws to refuse it. The socket is closed
      * if connecting or the handshake fails.
      */
-    fun open(host: String, port: Int, checkServer: (Array<X509Certificate>?) -> Unit): SSLSocket {
+    fun open(
+        host: String,
+        port: Int,
+        connectTimeoutMs: Int = CONNECT_TIMEOUT_MS,
+        handshakeTimeoutMs: Int = 0,
+        checkServer: (Array<X509Certificate>?) -> Unit
+    ): SSLSocket {
         Log.d(TAG, "Connecting to $host:$port with TLS")
         val (clientCert, privateKey) = clientIdentity
         val socket = createSslContext(clientCert, privateKey, checkServer).socketFactory.createSocket() as SSLSocket
@@ -62,9 +68,12 @@ internal class TvTlsConnector(private val filesDir: File) {
         socket.keepAlive = true
         socket.tcpNoDelay = true
         try {
-            socket.connect(InetSocketAddress(host, port), CONNECT_TIMEOUT_MS)
-            socket.soTimeout = 0
+            socket.connect(InetSocketAddress(host, port), connectTimeoutMs)
+            // 0 waits as long as the TV takes; a caller only probing for a TV sets a limit so a host that
+            // accepts the connection but never speaks TLS can't hang it
+            socket.soTimeout = handshakeTimeoutMs
             socket.startHandshake()
+            socket.soTimeout = 0
         } catch (e: Exception) {
             runCatching { socket.close() }
             throw if (e is java.net.SocketTimeoutException || e is java.net.ConnectException) {

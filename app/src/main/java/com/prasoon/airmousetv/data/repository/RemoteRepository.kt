@@ -13,6 +13,9 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -155,13 +158,27 @@ class RemoteRepository @Inject constructor(
      * multicast discovery relies on.
      */
     suspend fun scanSubnet(patient: Boolean = true) {
-        val hosts = subnetScanner.findTvHosts(patient)
-        session.note("subnet scan found ${hosts.size} TV(s)")
+        val open = subnetScanner.findTvHosts(patient)
+        // Some routers and repeaters accept a connection on any port, so an open port isn't proof of a TV.
+        // Hosts already listed were found by name or by an earlier sweep, so only the new ones are checked.
+        val listed = _discoveredTvs.value.map { it.host }.toSet()
+        val hosts = coroutineScope {
+            open.map { host -> async { host.takeIf { it in listed || session.answersAsTv(it) } } }
+                .awaitAll()
+                .filterNotNull()
+        }
+        session.note("subnet scan found ${hosts.size} TV(s) among ${open.size} open addresses")
         hosts.forEach { addByAddress(it) }
     }
 
     /** Adds [updatedTv], or replaces the entry already listed for the same TV. */
     private fun updateDiscoveredList(updatedTv: DiscoveredTv) {
+        // Android's mDNS lookup has resolved a TV's service to the phone's own address, which listed the
+        // phone as a TV; nothing on the phone listens there, so tapping it did nothing.
+        if (isOwnAddress(updatedTv.host)) {
+            Log.w(TAG, "Ignoring ${updatedTv.displayName}: it resolved to this phone's own address")
+            return
+        }
         // Atomic: this runs on the IO scope while onServiceLost runs on NSD's thread
         _discoveredTvs.update { current ->
             val list = current.toMutableList()
@@ -175,6 +192,11 @@ class RemoteRepository @Inject constructor(
             list.distinctBy { it.host }
         }
         Log.i(TAG, "📊 TVs: ${_discoveredTvs.value.size} - ${updatedTv.displayName}")
+    }
+
+    private fun isOwnAddress(host: String): Boolean {
+        val own = networkMonitor.localIpv4()?.first ?: return false
+        return own.joinToString(".") { (it.toInt() and 0xFF).toString() } == host
     }
 
     /** Forget every TV found so far, e.g. before a rescan, so a TV that has since been switched off drops out. */

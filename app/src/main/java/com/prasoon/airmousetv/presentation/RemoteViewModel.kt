@@ -578,12 +578,13 @@ class RemoteViewModel @Inject constructor(
 
         viewModelScope.launch {
             // Fail fast, staying on the list, if the TV is off, asleep or has moved
-            val reachable = remoteSession.isReachable(tv.host)
+            val reachable = remoteSession.isReachableWithRetry(tv.host)
             if (!reachable) {
-                repository.removeDiscovered(tv.host)
-                val message = "${tv.displayName} didn't answer, so it was taken off the list. Turn it on, then scan again."
+                // Not removed here: one failed tap can be a dropped packet between Wi-Fi bands. A TV that is
+                // really gone is dropped by the liveness checks, after repeated misses.
+                val message = "${tv.displayName} didn't answer. Check it's on and on the same Wi-Fi band, then tap it again."
                 _uiState.value = _uiState.value.copy(isCheckingTv = false, error = message)
-                // A retry from the pairing screen: the TV is gone from the list, so show the list
+                // A retry from the pairing screen: show the list again, where the TV can be tapped once more
                 if (_uiState.value.mode is RemoteMode.Pairing) returnToDiscovery(error = message)
                 return@launch
             }
@@ -602,6 +603,10 @@ class RemoteViewModel @Inject constructor(
                 // Reconnects straight away if the TV already trusts us, otherwise starts pairing
                 remoteSession.connect(tv.host, "AirMouseTV")
             } catch (e: Exception) {
+                if (remoteSession.isPairingPortStuck(tv.host)) {
+                    failConnect(tv, stuckPairingMessage(tv), removeTv = false)
+                    return@launch
+                }
                 failConnect(tv, if (e is TvUnreachableException) e.message else "Connection failed: ${e.message}", removeTv = e is TvUnreachableException)
                 return@launch
             }
@@ -617,7 +622,12 @@ class RemoteViewModel @Inject constructor(
                 !_uiState.value.awaitingCode
             if (stillConnecting) {
                 when (outcome) {
-                    null -> failConnect(tv, "${tv.displayName} didn't respond. Make sure it is on, then try again.", removeTv = false)
+                    null -> failConnect(
+                        tv,
+                        if (remoteSession.isPairingPortStuck(tv.host)) stuckPairingMessage(tv)
+                        else "${tv.displayName} didn't respond. Make sure it is on, then try again.",
+                        removeTv = false
+                    )
                     is ConnectionState.Error -> failConnect(tv, outcome.message, removeTv = false)
                     ConnectionState.Disconnected -> failConnect(tv, "Lost the connection to ${tv.displayName}.", removeTv = false)
                     else -> Unit
@@ -644,6 +654,9 @@ class RemoteViewModel @Inject constructor(
             )
         }
     }
+
+    private fun stuckPairingMessage(tv: DiscoveredTv) =
+        "${tv.displayName} is still busy with an earlier pairing. Restart the TV, or force-stop Android TV Remote Service in its settings, then try again."
 
     /** Starts over with the TV the pairing screen is showing, after a failed attempt. */
     fun retryPairing() {
