@@ -21,6 +21,7 @@ import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.update
@@ -31,6 +32,9 @@ import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.coroutines.withContext
 import java.io.BufferedInputStream
+import kotlin.time.Duration
+import kotlin.time.Duration.Companion.milliseconds
+import kotlin.time.Duration.Companion.seconds
 import java.io.BufferedOutputStream
 import java.io.DataInputStream
 import java.io.DataOutputStream
@@ -74,9 +78,30 @@ private const val REACHABILITY_TIMEOUT_MS = 1500
  */
 private const val RETRY_REACHABILITY_TIMEOUT_MS = 3500
 /** TLS handshake timeout when checking that a host found by the subnet sweep is really a TV. */
+/**
+ * How long a tap keeps probing a TV that doesn't answer. After the phone rejoins Wi-Fi the TV was
+ * measured taking about 11 s to answer, and longer on a weak 2.4 GHz link, so 5 s made people tap again.
+ */
+private val TAP_CHECK_WINDOW = 18.seconds
+/** Rest between tap probes, so a probe that fails instantly (no route yet) doesn't spin. */
+private val TAP_CHECK_PAUSE = 500.milliseconds
 private const val TV_CHECK_TIMEOUT_MS = 3000
 
 /**
+/**
+ * Runs [probe] again and again for up to [window] while it finds nothing at all. Any answer ends it:
+ * open, or refused, since a refusal means the host replied. Returns the last answer, or unreachable.
+ */
+internal suspend fun probeUntilAnswered(window: Duration, pause: Duration, probe: suspend () -> HostProbe): HostProbe =
+    withTimeoutOrNull(window) {
+        var result = probe()
+        while (result == HostProbe.UNREACHABLE) {
+            delay(pause)
+            result = probe()
+        }
+        result
+    } ?: HostProbe.UNREACHABLE
+
  * A pairing port that doesn't answer at all while the remote port does is stuck. A refusal isn't: it
  * means the service is still starting, which a restart of the TV doesn't help.
  */
@@ -243,16 +268,20 @@ class RemoteSessionManager @Inject constructor(
     suspend fun isReachable(host: String): Boolean = probeHost(host) == HostProbe.OPEN
 
     /**
-     * [isReachable] for a TV the user just tapped: one silent probe isn't proof it is gone, so a total
-     * lack of answer is retried once with a longer timeout. A refusal is final, since the host did answer.
+     * [isReachable] for a TV the user just tapped: silence isn't proof it is gone, so it is probed again
+     * for [TAP_CHECK_WINDOW] and the tap connects as soon as one probe gets through. A refusal is
+     * final, since the host did answer.
      */
     suspend fun isReachableWithRetry(host: String): Boolean {
         val first = probeHost(host)
         if (first != HostProbe.UNREACHABLE) return first == HostProbe.OPEN
-        note("no answer from $host, probing once more")
-        val reachable = probeHost(host, RETRY_REACHABILITY_TIMEOUT_MS) == HostProbe.OPEN
-        if (!reachable) noteFailure("tap check: still no answer from $host")
-        return reachable
+        note("no answer from $host, probing for up to ${TAP_CHECK_WINDOW.inWholeSeconds} s")
+        val result = probeUntilAnswered(TAP_CHECK_WINDOW, TAP_CHECK_PAUSE) {
+            probeHost(host, RETRY_REACHABILITY_TIMEOUT_MS)
+        }
+        if (result == HostProbe.OPEN) note("$host answered after a silent first probe")
+        else noteFailure("tap check: no answer from $host in ${TAP_CHECK_WINDOW.inWholeSeconds} s")
+        return result == HostProbe.OPEN
     }
 
     /**

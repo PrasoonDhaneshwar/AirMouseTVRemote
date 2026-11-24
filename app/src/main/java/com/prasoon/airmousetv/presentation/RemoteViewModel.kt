@@ -49,6 +49,8 @@ import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.coroutines.launch
+import kotlin.time.Duration.Companion.milliseconds
+import kotlin.time.Duration.Companion.seconds
 import javax.inject.Inject
 
 private const val TAG = "RemoteViewModel"
@@ -75,6 +77,9 @@ private const val PAIRING_RESPONSE_TIMEOUT_MS = 15_000L
 
 /** How long a turned-down code stays in its boxes, in red, before they empty for the next try. */
 private const val CODE_REJECTED_SHOWN_MS = 1000L
+
+/** How long a tap check may stay silent before the row says it is still trying; quick checks never show it. */
+private val CHECK_SLOW_AFTER = 3.seconds
 
 /** How long the "Paired" tick shows before the remote opens: long enough for its animation to finish. */
 private const val PAIRED_SHOWN_MS = 900L
@@ -105,7 +110,7 @@ private const val RECONNECT_BASE_DELAY_MS = 1000L
  * [STILL_TALKING_AFTER_POWER_MS] plus a ping interval and some margin, so a TV in network standby
  * has pinged by then.
  */
-private const val STAYS_ON_NETWORK_CHECK_MS = STILL_TALKING_AFTER_POWER_MS + 10_000L
+private val STAYS_ON_NETWORK_CHECK = STILL_TALKING_AFTER_POWER_MS.milliseconds + 10.seconds
 
 /** The names this TV's air mouse link is kept under; the remote can know one TV by different ones (see [tvLinkKeys]). */
 private val DiscoveredTv.airMouseKeys: List<String> get() = tvLinkKeys(name, friendlyName, host)
@@ -132,6 +137,8 @@ class RemoteViewModel @Inject constructor(
     private var refreshJob: Job? = null
     private var livenessJob: Job? = null
     private var pairingWatchJob: Job? = null
+    /** The reachability check and connect that follow a tap; cancelled by Back while the check is still running. */
+    private var selectJob: Job? = null
     private var discoveryRunning = false
 
     /** Keeps the TV's focused text field in step with what is typed on the phone. */
@@ -242,7 +249,7 @@ class RemoteViewModel @Inject constructor(
         val tappedAt = remoteSession.lastPowerAt ?: return
         powerWatchJob?.cancel()
         powerWatchJob = viewModelScope.launch {
-            val dropped = withTimeoutOrNull(STAYS_ON_NETWORK_CHECK_MS) {
+            val dropped = withTimeoutOrNull(STAYS_ON_NETWORK_CHECK) {
                 remoteSession.connectionState.first { it != ConnectionState.Connected }
             }
             if (dropped == null && !mayBeSwitchingOff(remoteSession.lastHeardAt, tappedAt)) {
@@ -577,14 +584,20 @@ class RemoteViewModel @Inject constructor(
 
         _uiState.value = _uiState.value.copy(isCheckingTv = true, error = null)
 
-        viewModelScope.launch {
-            // Fail fast, staying on the list, if the TV is off, asleep or has moved
+        selectJob = viewModelScope.launch {
+            val slowHint = launch {
+                delay(CHECK_SLOW_AFTER)
+                _uiState.value = _uiState.value.copy(isCheckSlow = true)
+            }
+            // Keeps probing for a while, staying on the list, so a TV slow to answer after the phone's
+            // Wi-Fi came back is reached without another tap. Reports failure if it is off, asleep or gone.
             val reachable = remoteSession.isReachableWithRetry(tv.host)
+            slowHint.cancel()
             if (!reachable) {
                 // Not removed here: one failed tap can be a dropped packet between Wi-Fi bands. A TV that is
                 // really gone is dropped by the liveness checks, after repeated misses.
                 val message = "${tv.displayName} didn't answer. Check it's on and on the same Wi-Fi band, then tap it again."
-                _uiState.value = _uiState.value.copy(isCheckingTv = false, error = message)
+                _uiState.value = _uiState.value.copy(isCheckingTv = false, isCheckSlow = false, error = message)
                 // A retry from the pairing screen: show the list again, where the TV can be tapped once more
                 if (_uiState.value.mode is RemoteMode.Pairing) returnToDiscovery(error = message)
                 return@launch
@@ -592,6 +605,7 @@ class RemoteViewModel @Inject constructor(
 
             _uiState.value = _uiState.value.copy(
                 isCheckingTv = false,
+                isCheckSlow = false,
                 mode = RemoteMode.Pairing(tv),
                 awaitingCode = false,
                 pairingCode = "",
@@ -715,8 +729,20 @@ class RemoteViewModel @Inject constructor(
     }
 
 
+    /** Stops a tap's reachability check that is still probing, back on the list as it was. */
+    fun cancelCheck() {
+        if (!_uiState.value.isCheckingTv) return
+        selectJob?.cancel()
+        _uiState.value = _uiState.value.copy(isCheckingTv = false, isCheckSlow = false)
+    }
+
     /** Abandons the connection attempt and returns to discovery. */
     fun cancelPairing() {
+        // A retry from the pairing screen can still be probing; it must not open pairing again after Back
+        if (_uiState.value.isCheckingTv) {
+            selectJob?.cancel()
+            _uiState.value = _uiState.value.copy(isCheckingTv = false, isCheckSlow = false)
+        }
         // Back on the Paired screen while it offers the air mouse means "not now", not a way to stay there
         if (_uiState.value.pairedOffer) return answerPairedOffer(setUp = false)
         // Already paired and about to open the remote: there is nothing left to cancel

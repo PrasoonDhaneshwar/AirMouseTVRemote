@@ -22,6 +22,8 @@ data class RemoteUiState(
     val isRefreshing: Boolean = false,
     /** True while the selected TV is being checked for reachability, before the pairing screen opens. */
     val isCheckingTv: Boolean = false,
+    /** True once the check has gone quiet for a few seconds, so the row says it is still trying and Back can stop it. */
+    val isCheckSlow: Boolean = false,
     /** True while the saved TV answers on the network but its remote service isn't up yet (a TV still starting). */
     val savedTvStarting: Boolean = false,
     /** True once the saved TV has not answered at all for a couple of minutes: it may be on another network or band. */
