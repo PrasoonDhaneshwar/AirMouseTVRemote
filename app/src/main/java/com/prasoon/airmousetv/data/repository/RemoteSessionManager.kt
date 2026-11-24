@@ -5,6 +5,7 @@ import android.content.pm.ApplicationInfo
 import android.os.SystemClock
 import android.util.Log
 import com.prasoon.airmousetv.data.api.FrameCodec
+import com.prasoon.airmousetv.data.api.awakeCheckStillValid
 import com.prasoon.airmousetv.data.api.computePairingSecret
 import com.prasoon.airmousetv.data.api.isRepeatPowerTap
 import com.prasoon.airmousetv.data.api.needsAwakeCheck
@@ -18,8 +19,9 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.async
-import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.first
@@ -30,6 +32,9 @@ import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.coroutines.withContext
+import kotlin.time.Duration
+import kotlin.time.Duration.Companion.milliseconds
+import kotlin.time.Duration.Companion.seconds
 import java.io.BufferedInputStream
 import java.io.BufferedOutputStream
 import java.io.DataInputStream
@@ -73,8 +78,29 @@ private const val REACHABILITY_TIMEOUT_MS = 1500
  * a SYN between the bands is sometimes dropped, so a TV that is on fails one probe and passes the next.
  */
 private const val RETRY_REACHABILITY_TIMEOUT_MS = 3500
+/**
+ * How long a tap keeps probing a TV that doesn't answer. After the phone rejoins Wi-Fi the TV was
+ * measured taking about 11 s to answer, and longer on a weak 2.4 GHz link, so 5 s made people tap again.
+ */
+private val TAP_CHECK_WINDOW = 18.seconds
+/** Rest between tap probes, so a probe that fails instantly (no route yet) doesn't spin. */
+private val TAP_CHECK_PAUSE = 500.milliseconds
 /** TLS handshake timeout when checking that a host found by the subnet sweep is really a TV. */
 private const val TV_CHECK_TIMEOUT_MS = 3000
+
+/**
+ * Runs [probe] again and again for up to [window] while it finds nothing at all. Any answer ends it:
+ * open, or refused, since a refusal means the host replied. Returns the last answer, or unreachable.
+ */
+internal suspend fun probeUntilAnswered(window: Duration, pause: Duration, probe: suspend () -> HostProbe): HostProbe =
+    withTimeoutOrNull(window) {
+        var result = probe()
+        while (result == HostProbe.UNREACHABLE) {
+            delay(pause)
+            result = probe()
+        }
+        result
+    } ?: HostProbe.UNREACHABLE
 
 /**
  * A pairing port that doesn't answer at all while the remote port does is stuck. A refusal isn't: it
@@ -159,12 +185,18 @@ class RemoteSessionManager @Inject constructor(
     @Volatile var lastHeardAt = 0L
         private set
 
+    /** When the TV last passed the awake check before a key press, on the [SystemClock.elapsedRealtime] clock; 0 if not yet. */
+    @Volatile private var awakeConfirmedAt = 0L
+
     /** When a Power tap was last sent to the TV, on the [SystemClock.elapsedRealtime] clock; null if none yet. */
     @Volatile var lastPowerAt: Long? = null
         private set
 
     /** Lets one key press at a time check that the TV is awake, so presses made meanwhile wait for the answer. */
     private val keyGate = Mutex()
+
+    /** When the last key press was written, on the [SystemClock.elapsedRealtime] clock; 0 if none yet. */
+    @Volatile private var lastKeySentAt = 0L
 
     /** Features agreed with the TV in the current remote session. */
     private var activeFeatures = SUPPORTED_FEATURES
@@ -243,16 +275,20 @@ class RemoteSessionManager @Inject constructor(
     suspend fun isReachable(host: String): Boolean = probeHost(host) == HostProbe.OPEN
 
     /**
-     * [isReachable] for a TV the user just tapped: one silent probe isn't proof it is gone, so a total
-     * lack of answer is retried once with a longer timeout. A refusal is final, since the host did answer.
+     * [isReachable] for a TV the user just tapped: silence isn't proof it is gone, so it is probed again
+     * for [TAP_CHECK_WINDOW] and the tap connects as soon as one probe gets through. A refusal is
+     * final, since the host did answer.
      */
     suspend fun isReachableWithRetry(host: String): Boolean {
         val first = probeHost(host)
         if (first != HostProbe.UNREACHABLE) return first == HostProbe.OPEN
-        note("no answer from $host, probing once more")
-        val reachable = probeHost(host, RETRY_REACHABILITY_TIMEOUT_MS) == HostProbe.OPEN
-        if (!reachable) noteFailure("tap check: still no answer from $host")
-        return reachable
+        note("no answer from $host, probing for up to ${TAP_CHECK_WINDOW.inWholeSeconds} s")
+        val result = probeUntilAnswered(TAP_CHECK_WINDOW, TAP_CHECK_PAUSE) {
+            probeHost(host, RETRY_REACHABILITY_TIMEOUT_MS)
+        }
+        if (result == HostProbe.OPEN) note("$host answered after a silent first probe")
+        else noteFailure("tap check: no answer from $host in ${TAP_CHECK_WINDOW.inWholeSeconds} s")
+        return result == HostProbe.OPEN
     }
 
     /**
@@ -299,15 +335,22 @@ class RemoteSessionManager @Inject constructor(
      * ([HostProbe.REFUSED]: the TV answers, saying nothing listens) from one that doesn't answer at all.
      * A Hisense Android TV 9 was seen taking ~7 minutes after a restart before the service came up.
      */
-    suspend fun probeHost(host: String, timeoutMs: Int = REACHABILITY_TIMEOUT_MS): HostProbe = coroutineScope {
-        val results = listOf(REMOTE_PORT, PAIRING_PORT)
-            .map { port -> async(Dispatchers.IO) { probePort(host, port, timeoutMs) } }
-            .awaitAll()
-        when {
-            HostProbe.OPEN in results -> HostProbe.OPEN
-            HostProbe.REFUSED in results -> HostProbe.REFUSED
-            else -> HostProbe.UNREACHABLE
+    suspend fun probeHost(host: String, timeoutMs: Int = REACHABILITY_TIMEOUT_MS): HostProbe {
+        // The first open port settles it. Waiting for both made every check last as long as the timeout
+        // whenever the TV's pairing port was jammed, though its remote port answered at once.
+        val results = Channel<HostProbe>(Channel.UNLIMITED)
+        listOf(REMOTE_PORT, PAIRING_PORT).forEach { port ->
+            scope.launch { results.trySend(probePort(host, port, timeoutMs)) }
         }
+        var refused = false
+        repeat(2) {
+            when (results.receive()) {
+                HostProbe.OPEN -> return HostProbe.OPEN
+                HostProbe.REFUSED -> refused = true
+                HostProbe.UNREACHABLE -> Unit
+            }
+        }
+        return if (refused) HostProbe.REFUSED else HostProbe.UNREACHABLE
     }
 
     /**
@@ -356,6 +399,8 @@ class RemoteSessionManager @Inject constructor(
         // reconnect. Until a first ping, wait longer: some sticks stay quiet when idle, and cutting
         // them off after 15 s made the session reconnect over and over.
         pingSeen = false
+        awakeConfirmedAt = 0L
+        lastKeySentAt = 0L
         lastHeardAt = SystemClock.elapsedRealtime()
         conn.socket.soTimeout = UNPINGED_READ_TIMEOUT_MS
         remoteConn = conn
@@ -419,21 +464,29 @@ class RemoteSessionManager @Inject constructor(
             note("dropped a Power tap right after the previous one")
             return false
         }
-        if (needsAwakeCheck(now, lastHeardAt, pingSeen, lastPowerAt)) {
+        if (needsAwakeCheck(now, lastHeardAt, pingSeen, lastPowerAt) &&
+            !awakeCheckStillValid(now, awakeConfirmedAt, lastPowerAt)
+        ) {
             val tvHost = host
             if (tvHost != null && !isReachable(tvHost)) {
                 note("TV silent for ${(now - lastHeardAt) / 1000}s and off the network, dropping a key press and the connection")
-                if (remoteConn === conn) {
-                    closeConn(conn)
-                    remoteConn = null
-                    _connectionState.value = ConnectionState.Disconnected
-                }
+                dropConnection(conn)
                 return false
             }
+            awakeConfirmedAt = SystemClock.elapsedRealtime()
         }
         if (powerTap) lastPowerAt = SystemClock.elapsedRealtime()
         send(payload, conn)
+        lastKeySentAt = SystemClock.elapsedRealtime()
         return true
+    }
+
+    /** Closes [conn] and reports Disconnected, which starts the reconnect; a no-op if it was already replaced. */
+    private fun dropConnection(conn: Conn) {
+        if (remoteConn !== conn) return
+        closeConn(conn)
+        remoteConn = null
+        _connectionState.value = ConnectionState.Disconnected
     }
 
     /** Writes one length-prefixed frame to [conn]; a no-op if it has been closed. */
@@ -453,7 +506,16 @@ class RemoteSessionManager @Inject constructor(
         scope.launch {
             try {
                 while (isActive && !conn.closed) {
-                    val frame = FrameCodec.readFrame(conn.input)
+                    val frame = try {
+                        FrameCodec.readFrame(conn.input)
+                    } catch (e: FrameCodec.IdleTimeoutException) {
+                        // The TV only pings once the line has been quiet for a few seconds, so while keys keep
+                        // going out it says nothing, and dropping the link then cut navigation off every 40 s
+                        val sentRecently = lastKeySentAt != 0L &&
+                            SystemClock.elapsedRealtime() - lastKeySentAt < REMOTE_READ_TIMEOUT_MS
+                        if (conn !== remoteConn || !sentRecently) throw e
+                        continue
+                    }
                     if (frame.isNotEmpty()) handler(frame)
                 }
             } catch (e: Exception) {

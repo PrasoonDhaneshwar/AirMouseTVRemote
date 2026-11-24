@@ -188,6 +188,8 @@ private fun AppScreens(viewModel: RemoteViewModel) {
     // There is no back stack: screens are picked from state, so Back must be told what "back" means here.
     // It lives outside the fading content, or a pairing screen on its way out would still catch Back
     BackHandler(enabled = uiState.mode is RemoteMode.Pairing, onBack = viewModel::cancelPairing)
+    // A tap's check can keep probing for a while; Back stops it instead of leaving the app
+    BackHandler(enabled = uiState.mode is RemoteMode.Discovery && uiState.isCheckingTv, onBack = viewModel::cancelCheck)
 
     AnimatedContent(
         targetState = uiState.mode.step,

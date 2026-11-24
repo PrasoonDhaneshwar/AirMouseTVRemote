@@ -24,6 +24,27 @@ class FrameCodecTest {
 
     private fun bytes(vararg values: Int) = ByteArray(values.size) { values[it].toByte() }
 
+    /** Serves [head], then times out like a socket whose peer went quiet. */
+    private fun quietAfter(vararg head: Int) = DataInputStream(object : java.io.InputStream() {
+        private var next = 0
+        override fun read(): Int {
+            if (next < head.size) return head[next++]
+            throw java.net.SocketTimeoutException("Read timed out")
+        }
+    })
+
+    @Test
+    fun aTimeoutBeforeAFrameStarts_isMarkedAsIdle() {
+        assertThrows(FrameCodec.IdleTimeoutException::class.java) { FrameCodec.readFrame(quietAfter()) }
+    }
+
+    @Test
+    fun aTimeoutInsideAFrame_isNotMarkedAsIdle() {
+        // Length says 5 bytes but only 1 arrives: the stream is mid-frame, so reading on would misread it
+        val e = assertThrows(java.net.SocketTimeoutException::class.java) { FrameCodec.readFrame(quietAfter(5, 1)) }
+        assertEquals(false, e is FrameCodec.IdleTimeoutException)
+    }
+
     @Test
     fun roundTrip_preservesPayloadAtVarintBoundaries() {
         for (size in listOf(0, 1, 127, 128, 300, 16_384, FrameCodec.MAX_FRAME_BYTES)) {

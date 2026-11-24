@@ -52,6 +52,16 @@ fun lostAfterPowerOff(now: Long, lastHeardAt: Long, lastPowerAt: Long?): Boolean
     lastPowerAt != null && now - lastPowerAt <= POWER_OFF_DROP_WINDOW_MS &&
         mayBeSwitchingOff(lastHeardAt, lastPowerAt)
 
+/** How long a passed "is the TV awake" check holds for further key presses, so a burst pays for it once. */
+const val AWAKE_CHECK_VALID_MS = 5_000L
+
+/**
+ * True when the awake check passed at [confirmedAt] still counts at [now]. A Power tap since then
+ * voids it, as the TV may be shutting down.
+ */
+fun awakeCheckStillValid(now: Long, confirmedAt: Long, lastPowerAt: Long?): Boolean =
+    confirmedAt > 0 && now - confirmedAt < AWAKE_CHECK_VALID_MS && (lastPowerAt == null || confirmedAt > lastPowerAt)
+
 /** True when a Power tap at [now] comes too soon after the one at [lastPowerAt] and should be dropped. */
 fun isRepeatPowerTap(now: Long, lastPowerAt: Long?): Boolean =
     lastPowerAt != null && now - lastPowerAt < POWER_REPEAT_GUARD_MS

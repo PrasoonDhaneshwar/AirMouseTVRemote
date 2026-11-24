@@ -159,6 +159,7 @@ private fun DiscoveryContent(
         Header(
             scanning = scanning,
             checking = checking,
+            slow = uiState.isCheckSlow,
             found = tvs.size,
             refreshing = uiState.isRefreshing,
             tvStarting = uiState.savedTvStarting,
@@ -181,6 +182,7 @@ private fun DiscoveryContent(
                     TvRow(
                         tv = tv,
                         checking = checking && tv.host == checkingHost,
+                        slow = uiState.isCheckSlow,
                         enabled = !checking,
                         onClick = {
                             checkingHost = tv.host
@@ -211,7 +213,7 @@ private fun DiscoveryContent(
 /** One headline saying what is happening, one line saying what to do, and the scan button. */
 @Composable
 private fun Header(
-    scanning: Boolean, checking: Boolean, found: Int, refreshing: Boolean,
+    scanning: Boolean, checking: Boolean, slow: Boolean, found: Int, refreshing: Boolean,
     tvStarting: Boolean, tvOffNetwork: Boolean, onRefresh: (() -> Unit)?
 ) {
     val busy = scanning || checking
@@ -238,6 +240,7 @@ private fun Header(
             )
             Text(
                 text = when {
+                    checking && slow -> "Taking a while. Press Back to stop."
                     checking -> "Making sure it's awake."
                     found == 0 && tvStarting -> "Your TV is on the network but still starting up. It will appear here by itself."
                     found == 0 && tvOffNetwork ->
@@ -436,7 +439,7 @@ private fun RefreshIcon(rotation: () -> Float = { 0f }) {
  * tapped are dimmed and off ([enabled] false), so a second tap can't start another check.
  */
 @Composable
-private fun TvRow(tv: DiscoveredTv, checking: Boolean, enabled: Boolean, onClick: () -> Unit, modifier: Modifier = Modifier) {
+private fun TvRow(tv: DiscoveredTv, checking: Boolean, slow: Boolean, enabled: Boolean, onClick: () -> Unit, modifier: Modifier = Modifier) {
     val hint = MaterialTheme.colorScheme.onSurfaceVariant
     Surface(
         onClick = onClick,
@@ -465,7 +468,7 @@ private fun TvRow(tv: DiscoveredTv, checking: Boolean, enabled: Boolean, onClick
                     overflow = TextOverflow.Ellipsis
                 )
                 Text(
-                    if (checking) "Checking it's on…" else tv.host,
+                    if (checking) (if (slow) "Still trying to reach it…" else "Checking it's on…") else tv.host,
                     style = MaterialTheme.typography.bodyMedium.copy(fontSize = 13.sp),
                     color = hint
                 )
@@ -541,6 +544,11 @@ private fun DiscoveryCompletePreview() = DiscoveryPreview(RemoteUiState(discover
 @Preview(showBackground = true, widthDp = 390, heightDp = 844, name = "Checking TV")
 @Composable
 private fun DiscoveryCheckingPreview() = DiscoveryPreview(RemoteUiState(discoveredTvs = previewTvs, isCheckingTv = true))
+
+@Preview(showBackground = true, widthDp = 390, heightDp = 844, name = "Checking TV, slow")
+@Composable
+private fun DiscoveryCheckingSlowPreview() =
+    DiscoveryPreview(RemoteUiState(discoveredTvs = previewTvs, isCheckingTv = true, isCheckSlow = true))
 
 @Preview(showBackground = true, widthDp = 390, heightDp = 844, name = "Nothing found")
 @Composable
