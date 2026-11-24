@@ -3,6 +3,7 @@ package com.prasoon.airmousetv.data.api
 import java.io.DataInputStream
 import java.io.DataOutputStream
 import java.io.IOException
+import java.net.SocketTimeoutException
 
 /**
  * The Android TV Remote protocol (Polo + RemoteMessage) uses
@@ -18,6 +19,12 @@ object FrameCodec {
     /** A 32-bit varint is at most 5 bytes; more means the stream is corrupt. */
     private const val MAX_VARINT_BYTES = 5
 
+    /**
+     * The read timed out before the first byte of a frame arrived, so the stream is still on a frame
+     * boundary and reading can simply go on. A timeout inside a frame is a plain SocketTimeoutException.
+     */
+    class IdleTimeoutException(cause: SocketTimeoutException) : SocketTimeoutException(cause.message)
+
     fun readFrame(input: DataInputStream): ByteArray {
         // Read the varint length prefix (protobuf-style MSB encoding)
         var length = 0
@@ -25,7 +32,11 @@ object FrameCodec {
         var byteRead: Int
         var bytesRead = 0
         do {
-            byteRead = input.read()
+            byteRead = try {
+                input.read()
+            } catch (e: SocketTimeoutException) {
+                if (bytesRead == 0) throw IdleTimeoutException(e) else throw e
+            }
             if (byteRead == -1) {
                 throw IOException("EOF reached while reading length prefix")
             }
