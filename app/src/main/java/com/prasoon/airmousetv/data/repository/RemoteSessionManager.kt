@@ -13,8 +13,10 @@ import com.prasoon.airmousetv.data.api.proto.RemoteMessageEncoder
 import com.prasoon.airmousetv.data.model.ConnectionState
 import com.prasoon.airmousetv.data.model.ImeField
 import com.prasoon.airmousetv.proto.polo.OuterMessage
+import com.prasoon.airmousetv.proto.remote.RemoteKeyCode
 import com.prasoon.airmousetv.proto.remote.RemoteMessage
 import dagger.hilt.android.qualifiers.ApplicationContext
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -39,6 +41,7 @@ import java.io.BufferedInputStream
 import java.io.BufferedOutputStream
 import java.io.DataInputStream
 import java.io.DataOutputStream
+import java.io.IOException
 import java.net.InetSocketAddress
 import java.net.Socket
 import java.security.cert.CertificateException
@@ -54,11 +57,13 @@ private const val PAIRING_PORT = 6467
 /** Remote-control port on the TV; only accepts clients it has paired with. */
 private const val REMOTE_PORT = 6466
 /**
- * Features we can use, as a bitmask: PING 1, KEY 2, IME 4, POWER 32, VOLUME 64, APP_LINK 512.
- * The session activates only those the TV also offers (voice is deliberately left out).
+ * Features we can use, as a bitmask: PING 1, KEY 2, IME 4, VOICE 8, POWER 32, VOLUME 64, APP_LINK 512.
+ * The session activates only those the TV also offers.
  */
 private const val APP_LINK_FEATURE = 512
-private const val SUPPORTED_FEATURES = 1 or 2 or 4 or 32 or 64 or 512
+/** With it active, the TV answers a search key with a voice session instead of only opening its search. */
+private const val VOICE_FEATURE = 8
+private const val SUPPORTED_FEATURES = 1 or 2 or 4 or VOICE_FEATURE or 32 or 64 or 512
 /**
  * How long to wait for an already-paired TV to activate the session before pairing instead. A TV
  * that doesn't trust us closes the connection at once, so this only has to cover a slow trusted
@@ -161,6 +166,17 @@ class RemoteSessionManager @Inject constructor(
     private val _foregroundApp = MutableStateFlow<String?>(null)
     /** Package of the app in front on the TV, as last reported by it; null until it has reported one. */
     val foregroundApp: StateFlow<String?> = _foregroundApp
+
+    /** Backing flow for [voiceOffered]. */
+    private val _voiceOffered = MutableStateFlow(false)
+    /** True when the connected TV offered voice, so the Ask key can stream to its assistant. */
+    val voiceOffered: StateFlow<Boolean> = _voiceOffered
+
+    /** The last voice session whose end of speech the TV has reported, or -1. */
+    private val _voiceSpeechEnded = MutableStateFlow(-1)
+
+    /** Waits for the TV's RemoteVoiceBegin after a search key; set only while [beginVoice] is waiting. */
+    @Volatile private var voiceBeginWaiter: CompletableDeferred<Int>? = null
 
     private val diagnostics = ArrayDeque<String>()
 
@@ -489,12 +505,12 @@ class RemoteSessionManager @Inject constructor(
         _connectionState.value = ConnectionState.Disconnected
     }
 
-    /** Writes one length-prefixed frame to [conn]; a no-op if it has been closed. */
-    private suspend fun send(payload: ByteArray, conn: Conn) {
+    /** Writes one length-prefixed frame to [conn]; a no-op if it has been closed. [log] = false keeps a large frame out of the log. */
+    private suspend fun send(payload: ByteArray, conn: Conn, log: Boolean = true) {
         withContext(Dispatchers.IO) {
             conn.writeLock.withLock {
                 if (conn.closed) return@withLock
-                logFrame("Sending", payload)
+                if (log) logFrame("Sending", payload)
                 FrameCodec.writeFrame(conn.output, payload)
             }
         }
@@ -673,6 +689,7 @@ class RemoteSessionManager @Inject constructor(
                 val textOffered = activeFeatures and 4 != 0
                 Log.d(TAG, "RemoteConfigure from TV: ${info.model} offers $offered, using $activeFeatures")
                 note("TV ${info.vendor} ${info.model}, remote service ${info.appVersion}; offers $offered, using $activeFeatures, text input ${if (textOffered) "offered" else "NOT offered"}")
+                _voiceOffered.value = activeFeatures and VOICE_FEATURE != 0
                 send(RemoteMessageEncoder.encodeConfigure(activeFeatures), conn)
             }
             message.hasRemoteSetActive() -> {
@@ -705,6 +722,17 @@ class RemoteSessionManager @Inject constructor(
                         showRequests = (old?.showRequests ?: 0) + if (edit.imeCounter > 0) 1 else 0
                     )
                 }
+            }
+            // The TV's answer to a search key while voice is active: the session the voice is to go into
+            message.hasRemoteVoiceBegin() -> message.remoteVoiceBegin.let {
+                note("TV opened voice session ${it.sessionId} for ${it.packageName}")
+                voiceBeginWaiter?.complete(it.sessionId)
+            }
+            message.hasRemoteVoiceEnd() -> note("TV ended voice session ${message.remoteVoiceEnd.sessionId}")
+            // An empty payload from the TV says its assistant has heard the end of the speech
+            message.hasRemoteVoicePayload() -> message.remoteVoicePayload.sessionId.let {
+                note("TV heard the end of speech in voice session $it")
+                _voiceSpeechEnded.value = it
             }
             // Sent when the TV's screen turns on (true) or off (false)
             message.hasRemoteStart() -> note("TV screen ${if (message.remoteStart.started) "on" else "off"}")
@@ -763,6 +791,57 @@ class RemoteSessionManager @Inject constructor(
         note("opening a link on the TV")
         send(RemoteMessageEncoder.encodeAppLink(link))
         return true
+    }
+
+    /**
+     * Opens a voice session: presses the search key, waits up to [timeoutMs] for the TV to answer with
+     * a session id, and accepts it. Returns the id, or null if the TV didn't offer voice, the key
+     * couldn't be sent, or the TV didn't answer in time.
+     */
+    suspend fun beginVoice(timeoutMs: Long): Int? {
+        if (activeFeatures and VOICE_FEATURE == 0) return null
+        val waiter = CompletableDeferred<Int>()
+        voiceBeginWaiter = waiter
+        // The TV numbers sessions from 1 again on each connection, so an old session's end must not
+        // be taken for the new one's
+        _voiceSpeechEnded.value = -1
+        try {
+            val keySent = sendKey(RemoteMessageEncoder.encodeKeyCode(RemoteKeyCode.KEYCODE_SEARCH), powerTap = false)
+            if (!keySent) return null
+            val sessionId = withTimeoutOrNull(timeoutMs) { waiter.await() }
+            if (sessionId == null) {
+                noteFailure("no voice session from the TV within ${timeoutMs / 1000.0} s of the search key")
+                return null
+            }
+            val conn = remoteConn ?: return null
+            send(RemoteMessageEncoder.encodeVoiceBegin(sessionId), conn)
+            return sessionId
+        } finally {
+            if (voiceBeginWaiter === waiter) voiceBeginWaiter = null
+        }
+    }
+
+    /** Sends one chunk of voice into session [sessionId]; throws if the connection has gone, so the speaker learns nothing was sent. */
+    suspend fun sendVoice(sessionId: Int, samples: ByteArray) {
+        val conn = remoteConn ?: throw IOException("No connection to the TV")
+        // Counts as activity, like a key: a TV that doesn't ping while it listens isn't taken for gone
+        lastKeySentAt = SystemClock.elapsedRealtime()
+        send(RemoteMessageEncoder.encodeVoicePayload(sessionId, samples), conn, log = false)
+    }
+
+    /**
+     * Returns once the TV has reported hearing the end of speech in session [sessionId] (at once if
+     * it already has). The session must stay open until then: ended earlier, the search is cancelled.
+     */
+    suspend fun awaitSpeechEnd(sessionId: Int) {
+        _voiceSpeechEnded.first { it == sessionId }
+    }
+
+    /** Ends voice session [sessionId]: the TV's assistant then acts on what it heard. */
+    suspend fun endVoice(sessionId: Int) {
+        val conn = remoteConn ?: return
+        note("ended voice session $sessionId")
+        send(RemoteMessageEncoder.encodeVoiceEnd(sessionId), conn)
     }
 
     /**

@@ -3,12 +3,14 @@ package com.prasoon.airmousetv.ui.screens
 import android.content.Context
 import android.view.HapticFeedbackConstants
 import android.widget.Toast
+import androidx.activity.compose.BackHandler
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.Crossfade
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -32,6 +34,7 @@ import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.selection.selectable
@@ -97,27 +100,34 @@ import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.draw.drawWithCache
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.PointMode
 import androidx.compose.ui.graphics.Shape
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.StrokeCap
+import androidx.compose.ui.graphics.StrokeJoin
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.graphics.vector.path
+import androidx.compose.ui.graphics.vector.rememberVectorPainter
+import androidx.compose.ui.layout.layout
 import androidx.compose.ui.input.pointer.PointerEventPass
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalView
+import androidx.compose.ui.semantics.LiveRegionMode
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.disabled
+import androidx.compose.ui.semantics.liveRegion
 import androidx.compose.ui.semantics.onClick
 import androidx.compose.ui.semantics.role
 import androidx.compose.ui.semantics.semantics
@@ -142,10 +152,14 @@ import com.prasoon.airmousetv.airmouse.model.PointerLinkState
 import com.prasoon.airmousetv.data.model.RemoteMode
 import com.prasoon.airmousetv.data.model.RemoteUiState
 import com.prasoon.airmousetv.data.model.TvKey
+import com.prasoon.airmousetv.data.model.VoiceState
 import com.prasoon.airmousetv.presentation.RemoteViewModel
 import com.prasoon.airmousetv.ui.theme.AirMouseTVRemoteTheme
 import com.prasoon.airmousetv.ui.theme.Amber
 import com.prasoon.airmousetv.ui.theme.AmberText
+import com.prasoon.airmousetv.ui.theme.Charcoal
+import com.prasoon.airmousetv.ui.theme.TipSurface
+import com.prasoon.airmousetv.ui.theme.VideoRed
 import com.prasoon.airmousetv.ui.theme.Faint
 import com.prasoon.airmousetv.ui.theme.MenuSurface
 import com.prasoon.airmousetv.ui.theme.Offline
@@ -182,8 +196,8 @@ internal data class AirOffer(
 )
 
 /**
- * The working remote: D-pad or touchpad in the middle of the thumb's reach, Back/Home/Keyboard
- * under it, then media and volume. A short press taps the key; holding it sends a long press.
+ * The working remote: D-pad or touchpad in the middle of the thumb's reach, then the key row
+ * (Keyboard, Back and Home, Ask), then media and volume. A short press taps a key; holding it sends a long press.
  * While a dropped session is being re-established the keys are disabled and the header says so.
  */
 @Composable
@@ -203,14 +217,73 @@ fun RemoteScreen(viewModel: RemoteViewModel) {
     }
     var showTextEntry by remember { mutableStateOf(false) }
     var showYouTubeSearch by remember { mutableStateOf(false) }
+    var showSpeechSearch by remember { mutableStateOf(false) }
     val clipboard = LocalClipboardManager.current
     val tvName = rememberLastNonNull((uiState.mode as? RemoteMode.Connected)?.tv?.displayName).orEmpty().ifBlank { "TV" }
-    // The TV asks for its keyboard by bumping showRequests; open text entry on each new request
+    // The TV asks for its keyboard by bumping showRequests; open text entry on each new request. Not
+    // while the phone's speech to text is open: it opened the TV's search itself, and types into it
     val showRequests = uiState.imeField?.showRequests ?: 0
     var seenRequests by remember { mutableIntStateOf(showRequests) }
     LaunchedEffect(showRequests) {
-        if (showRequests > seenRequests) showTextEntry = true
+        if (showRequests > seenRequests && !showSpeechSearch) showTextEntry = true
         seenRequests = showRequests
+    }
+
+    // YouTube draws its own keyboard, so the TV reports no text box while it is open: the Keyboard key
+    // then searches YouTube instead of sitting dimmed
+    val inYouTube = uiState.foregroundApp?.startsWith("com.google.android.youtube.tv") == true
+    val youTubeKey = inYouTube && uiState.imeField == null
+    var youTubeTipSeen by rememberSaveable { mutableStateOf(uiPrefs.getBoolean(PREF_YOUTUBE_TIP_SEEN, false)) }
+    val dismissYouTubeTip = {
+        if (!youTubeTipSeen) {
+            youTubeTipSeen = true
+            uiPrefs.edit { putBoolean(PREF_YOUTUBE_TIP_SEEN, true) }
+        }
+    }
+    val showYouTubeTip = youTubeKey && !youTubeTipSeen
+    LaunchedEffect(showYouTubeTip) {
+        if (showYouTubeTip) {
+            delay(YOUTUBE_TIP_SHOWN_MS)
+            dismissYouTubeTip()
+        }
+    }
+
+    // Voice: the TV's assistant where the TV offers it, otherwise the phone's speech to text if the
+    // phone has a recognizer, otherwise no Ask key at all
+    val hasRecognizer = remember { context.hasSpeechRecognizer() }
+    val askMode = when {
+        uiState.voiceOffered -> AskMode.VOICE
+        hasRecognizer -> AskMode.TYPE
+        else -> null
+    }
+    val mic = rememberMicPermission(tvName)
+    val voiceActions = VoiceActions(
+        onHoldStart = { if (mic.granted()) viewModel.startVoice(tapMode = false) else mic.ask {} },
+        onCancelArmed = viewModel::setVoiceCancelArmed,
+        onRelease = { cancelled -> if (cancelled) viewModel.cancelVoice() else viewModel.finishVoice() },
+        onShortTap = {
+            if (mic.granted()) Toast.makeText(context, "Hold the mic key and speak", Toast.LENGTH_SHORT).show()
+            else mic.ask {}
+        },
+        onTapToggle = {
+            when {
+                askMode == AskMode.TYPE -> mic.ask { showSpeechSearch = true }
+                uiState.voice is VoiceState.Listening -> viewModel.finishVoice()
+                else -> mic.ask { viewModel.startVoice(tapMode = true) }
+            }
+        },
+        onStopAndSend = viewModel::finishVoice,
+        onCancel = viewModel::cancelVoice,
+        onTryAgain = {
+            viewModel.dismissVoice()
+            if (!uiState.isReconnecting) mic.ask { viewModel.startVoice(tapMode = true) }
+        },
+        onDismiss = viewModel::dismissVoice
+    )
+    // Back stops a search started by a tap, and closes the "Sent" card or an error
+    val voice = uiState.voice
+    BackHandler(enabled = voice is VoiceState.Sent || voice is VoiceState.Failed || (voice as? VoiceState.Listening)?.tapMode == true) {
+        if (voice is VoiceState.Listening) viewModel.cancelVoice() else viewModel.dismissVoice()
     }
     val selectPadMode = { mode: PadMode ->
         padMode = mode
@@ -308,15 +381,22 @@ fun RemoteScreen(viewModel: RemoteViewModel) {
             viewModel.sendKey(key, action)
         },
         onShowKeyboard = {
-            if (uiState.imeField != null) {
-                showTextEntry = true
-            } else {
-                Toast.makeText(context, "Open a search box on the TV first", Toast.LENGTH_SHORT).show()
+            when {
+                uiState.imeField != null -> showTextEntry = true
+                youTubeKey -> {
+                    dismissYouTubeTip()
+                    showYouTubeSearch = true
+                }
+                else -> Toast.makeText(context, "Open a search box on the TV first", Toast.LENGTH_SHORT).show()
             }
         },
-        onShowYouTubeSearch = { showYouTubeSearch = true },
         onCopyDiagnostics = copyDiagnostics,
-        onSwitchTv = viewModel::switchTv
+        onSwitchTv = viewModel::switchTv,
+        youTubeKey = youTubeKey,
+        showYouTubeTip = showYouTubeTip,
+        onDismissYouTubeTip = dismissYouTubeTip,
+        askMode = askMode,
+        voiceActions = voiceActions
     )
 
     if (showAirSettings && airMouse.linked) {
@@ -341,7 +421,29 @@ fun RemoteScreen(viewModel: RemoteViewModel) {
     if (showYouTubeSearch) {
         YouTubeSearchSheet(tvName = tvName, onSearch = viewModel::searchYouTube, onDismiss = { showYouTubeSearch = false })
     }
+    if (showSpeechSearch) {
+        SpeechSearchSheet(viewModel, tvName, youTube = youTubeKey, onDismiss = { showSpeechSearch = false })
+    }
 }
+
+/** What the Ask key and the voice panel do; see [AskKey] and [VoiceOverlay]. */
+internal class VoiceActions(
+    val onHoldStart: () -> Unit = {},
+    val onCancelArmed: (Boolean) -> Unit = {},
+    val onRelease: (cancelled: Boolean) -> Unit = {},
+    val onShortTap: () -> Unit = {},
+    val onTapToggle: () -> Unit = {},
+    val onStopAndSend: () -> Unit = {},
+    val onCancel: () -> Unit = {},
+    val onTryAgain: () -> Unit = {},
+    val onDismiss: () -> Unit = {}
+)
+
+/** Set once the "Search YouTube from your phone" bubble has gone: after a tap on the key, or [YOUTUBE_TIP_SHOWN_MS]. */
+private const val PREF_YOUTUBE_TIP_SEEN = "youtube_tip_seen"
+
+/** How long the YouTube tip stays if the key isn't tapped: long enough to read, short enough not to nag. */
+private const val YOUTUBE_TIP_SHOWN_MS = 5000L
 
 /** Small capitals under a key or a group of keys. */
 private val captionStyle
@@ -531,27 +633,179 @@ private fun AirMouseTip(onDismiss: () -> Unit) {
     }
 }
 
-/** A row of keys in one rounded pill, with a caption underneath saying what they are. */
+/**
+ * A row of keys in one rounded pill. Since 3.0 no caption: the icons are the common ones, and screen
+ * readers still hear each key's name.
+ */
 @Composable
-private fun KeyPill(caption: String, modifier: Modifier = Modifier, keys: @Composable RowScope.() -> Unit) {
-    Column(modifier, horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(6.dp)) {
+private fun KeyPill(modifier: Modifier = Modifier, keys: @Composable RowScope.() -> Unit) {
+    Row(
+        modifier = modifier
+            .clip(CircleShape)
+            .background(MaterialTheme.colorScheme.surfaceVariant)
+            .padding(4.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        content = keys
+    )
+}
+
+/** Below this screen width the key row's keys shrink (round keys 50 dp, pill keys 52 dp wide), so the row fits a 320 dp phone. */
+private val COMPACT_KEYS_BELOW = 360.dp
+
+/**
+ * The row under the pad: Keyboard, then Back and Home in one pill with Home lit (the key the thumb
+ * goes back to), then Ask. Nothing in it appears or disappears with the TV's state, so it never reflows:
+ * the Keyboard key changes its face for YouTube, and the Ask key dims on a TV without voice. On a
+ * phone with nothing to offer for voice, an empty space keeps the pill in the middle.
+ */
+@Composable
+private fun KeyRow(
+    uiState: RemoteUiState,
+    enabled: Boolean,
+    compact: Boolean,
+    onKey: (TvKey, KeyAction) -> Unit,
+    onShowKeyboard: () -> Unit,
+    youTubeKey: Boolean,
+    showYouTubeTip: Boolean,
+    onDismissYouTubeTip: () -> Unit,
+    askMode: AskMode?,
+    voiceActions: VoiceActions
+) {
+    val round = if (compact) 50.dp else 58.dp
+    val pillKey = Modifier.size(if (compact) 52.dp else 64.dp, 50.dp)
+    val pillShape = RoundedCornerShape(25.dp)
+    Box(Modifier.fillMaxWidth()) {
         Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .clip(CircleShape)
-                .background(MaterialTheme.colorScheme.surfaceVariant)
-                .padding(4.dp),
-            verticalAlignment = Alignment.CenterVertically,
-            content = keys
-        )
-        Text(caption, style = captionStyle, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            KeyboardKey(
+                size = round, enabled = enabled, youTube = youTubeKey,
+                // Dimmed, but still tappable, while the TV has no text box: a tap then says what to do
+                dimmed = uiState.imeField == null && !youTubeKey,
+                onClick = onShowKeyboard
+            )
+            KeyPill {
+                RemoteKey(TvKey.BACK, onKey, enabled, pillKey, pillShape, Color.Transparent) {
+                    KeyIcon(Icons.AutoMirrored.Filled.ArrowBack, "Back")
+                }
+                Box(Modifier.width(4.dp))
+                RemoteKey(TvKey.HOME, onKey, enabled, pillKey, pillShape, SurfaceHigh) {
+                    KeyIcon(Icons.Default.Home, "Home")
+                }
+            }
+            if (askMode != null) {
+                AskKey(
+                    mode = askMode,
+                    voice = uiState.voice,
+                    enabled = enabled,
+                    size = round,
+                    onHoldStart = voiceActions.onHoldStart,
+                    onCancelArmed = voiceActions.onCancelArmed,
+                    onRelease = voiceActions.onRelease,
+                    onShortTap = voiceActions.onShortTap,
+                    onTapToggle = voiceActions.onTapToggle
+                )
+            } else {
+                Box(Modifier.size(round))
+            }
+        }
+        if (showYouTubeTip) {
+            TipBubble(
+                "Search YouTube from your phone",
+                onDismiss = onDismissYouTubeTip,
+                // Sits above the row without taking room in it, so nothing moves when it goes
+                modifier = Modifier.align(Alignment.TopStart).layout { measurable, constraints ->
+                    val placeable = measurable.measure(constraints.copy(minWidth = 0))
+                    layout(placeable.width, 0) { placeable.place(0, -placeable.height - 14.dp.roundToPx()) }
+                }
+            )
+        }
+    }
+}
+
+/**
+ * The round Keyboard key. While YouTube is on screen with no text box it is lit and shows a search
+ * glass with a red play mark, and opens YouTube search; otherwise it opens the typing sheet.
+ */
+@Composable
+private fun KeyboardKey(size: Dp, enabled: Boolean, youTube: Boolean, dimmed: Boolean, onClick: () -> Unit) {
+    val interaction = remember { MutableInteractionSource() }
+    val pressed by interaction.collectIsPressedAsState()
+    KeySurface(
+        enabled = enabled && !dimmed,
+        pressed = pressed,
+        held = false,
+        shape = CircleShape,
+        container = MaterialTheme.colorScheme.surfaceVariant,
+        border = null,
+        // The key draws its own pressed look, so the ripple would only double it
+        modifier = Modifier.size(size).clickable(interaction, indication = null, enabled = enabled, onClick = onClick)
+    ) {
+        if (youTube) {
+            Image(rememberVectorPainter(rememberVideoSearchIcon()), contentDescription = "Search YouTube", modifier = Modifier.size(26.dp))
+        } else {
+            KeyIcon(Icons.Default.Keyboard, "Keyboard")
+        }
+    }
+}
+
+/**
+ * A search glass with a red play mark in its lens: a general video-search sign rather than YouTube's
+ * logo. Built in two colours, which a tinted [Icon] would flatten into one.
+ */
+@Composable
+private fun rememberVideoSearchIcon(): ImageVector {
+    val ink = MaterialTheme.colorScheme.onSurface
+    return remember(ink) {
+        ImageVector.Builder("VideoSearch", 24.dp, 24.dp, 24f, 24f).apply {
+            path(stroke = SolidColor(ink), strokeLineWidth = 2f, strokeLineCap = StrokeCap.Round) {
+                moveTo(17.5f, 10.5f)
+                arcTo(7f, 7f, 0f, true, true, 3.5f, 10.5f)
+                arcTo(7f, 7f, 0f, true, true, 17.5f, 10.5f)
+                close()
+                moveTo(21f, 21f); lineTo(15.5f, 15.5f)
+            }
+            path(fill = SolidColor(VideoRed), stroke = SolidColor(VideoRed), strokeLineWidth = 1.2f, strokeLineJoin = StrokeJoin.Round) {
+                moveTo(9f, 7.8f); lineTo(9f, 13.2f); lineTo(13.4f, 10.5f); close()
+            }
+        }.build()
+    }
+}
+
+/** A light one-time bubble pointing down at the key under its left end; a tap closes it. */
+@Composable
+private fun TipBubble(text: String, onDismiss: () -> Unit, modifier: Modifier = Modifier) {
+    Box(
+        modifier
+            .semantics { liveRegion = LiveRegionMode.Polite }
+            .clickable(onClick = onDismiss)
+            .drawBehind {
+                // The pointer under the bubble, centred over the first key's middle
+                val half = 6.dp.toPx()
+                val x = 29.dp.toPx()
+                drawPath(
+                    Path().apply {
+                        moveTo(x - half, size.height - 1f)
+                        lineTo(x, size.height + half)
+                        lineTo(x + half, size.height - 1f)
+                        close()
+                    },
+                    TipSurface
+                )
+            }
+            .background(TipSurface, RoundedCornerShape(12.dp))
+            .padding(horizontal = 14.dp, vertical = 9.dp)
+    ) {
+        Text(text, style = MaterialTheme.typography.bodyMedium.copy(fontSize = 14.sp, fontWeight = FontWeight.Medium), color = Charcoal)
     }
 }
 
 /** Previous / play-pause / next. The keys share the pill's width, so they still fit on a narrow phone. */
 @Composable
 private fun MediaPill(onKey: (TvKey, KeyAction) -> Unit, enabled: Boolean, modifier: Modifier = Modifier) {
-    KeyPill("MEDIA", modifier) {
+    KeyPill(modifier) {
         val side = Modifier.weight(1f).height(48.dp)
         RemoteKey(TvKey.PREVIOUS, onKey, enabled, side, container = Color.Transparent) {
             KeyIcon(Icons.Default.SkipPrevious, "Previous")
@@ -568,7 +822,7 @@ private fun MediaPill(onKey: (TvKey, KeyAction) -> Unit, enabled: Boolean, modif
 /** Minus, mute and plus keys. The TV protocol has volume steps rather than an absolute level, so there is no slider. */
 @Composable
 private fun VolumePill(onKey: (TvKey, KeyAction) -> Unit, enabled: Boolean, modifier: Modifier = Modifier) {
-    KeyPill("VOLUME", modifier) {
+    KeyPill(modifier) {
         val side = Modifier.weight(1f).height(48.dp)
         RemoteKey(TvKey.VOLUME_DOWN, onKey, enabled, side, container = Color.Transparent) {
             KeyIcon(Icons.Default.Remove, "Volume down")
@@ -714,9 +968,13 @@ private fun RemoteContent(
     onDismissHoldTip: () -> Unit,
     onKey: (TvKey, KeyAction) -> Unit,
     onShowKeyboard: () -> Unit,
-    onShowYouTubeSearch: () -> Unit,
     onCopyDiagnostics: () -> Unit,
-    onSwitchTv: () -> Unit
+    onSwitchTv: () -> Unit,
+    youTubeKey: Boolean = false,
+    showYouTubeTip: Boolean = false,
+    onDismissYouTubeTip: () -> Unit = {},
+    askMode: AskMode? = AskMode.VOICE,
+    voiceActions: VoiceActions = VoiceActions()
 ) {
     val reconnecting = uiState.isReconnecting
     val enabled = !reconnecting
@@ -731,6 +989,7 @@ private fun RemoteContent(
     ) {
         // Larger text makes the fixed rows taller, so the screen counts as short sooner
         val scrolls = maxHeight < MIN_FIXED_LAYOUT_HEIGHT * LocalDensity.current.fontScale.coerceAtLeast(1f)
+        val compactKeys = maxWidth < COMPACT_KEYS_BELOW
         Column(
             modifier = Modifier
                 .fillMaxSize()
@@ -790,26 +1049,29 @@ private fun RemoteContent(
                         }
                     }
                 }
+                // Over the pad, not over the keys: the thumb stays on the Ask key while the panel shows
+                VoiceOverlay(
+                    uiState.voice, tvName,
+                    onStopAndSend = voiceActions.onStopAndSend,
+                    onCancel = voiceActions.onCancel,
+                    onTryAgain = voiceActions.onTryAgain,
+                    onDismiss = voiceActions.onDismiss,
+                    modifier = Modifier.fillMaxSize()
+                )
             }
 
-            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceAround) {
-                LabeledKey("BACK", enabled, onClick = null, key = TvKey.BACK, onKey = onKey) {
-                    KeyIcon(Icons.AutoMirrored.Filled.ArrowBack, "Back")
-                }
-                LabeledKey("HOME", enabled, onClick = null, key = TvKey.HOME, onKey = onKey) {
-                    KeyIcon(Icons.Default.Home, "Home")
-                }
-                // Dimmed, but still tappable, while the TV has no text box: a tap then says what to do
-                LabeledKey("KEYBOARD", enabled, onClick = onShowKeyboard, dimmed = uiState.imeField == null) {
-                    KeyIcon(Icons.Default.Keyboard, "Keyboard")
-                }
-                // YouTube draws its own keyboard that the TV can't type into, so offer a direct search
-                if (uiState.foregroundApp?.startsWith("com.google.android.youtube.tv") == true) {
-                    LabeledKey("YOUTUBE", enabled, onClick = onShowYouTubeSearch) {
-                        KeyIcon(Icons.Default.Search, "Search YouTube")
-                    }
-                }
-            }
+            KeyRow(
+                uiState = uiState,
+                enabled = enabled,
+                compact = compactKeys,
+                onKey = onKey,
+                onShowKeyboard = onShowKeyboard,
+                youTubeKey = youTubeKey,
+                showYouTubeTip = showYouTubeTip && enabled,
+                onDismissYouTubeTip = onDismissYouTubeTip,
+                askMode = askMode,
+                voiceActions = voiceActions
+            )
 
             Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                 MediaPill(onKey, enabled, Modifier.weight(1f))
@@ -968,6 +1230,7 @@ private fun YouTubeSearchSheet(tvName: String, onSearch: (String) -> Unit, onDis
         sendIcon = Icons.Default.Search,
         sendDescription = "Search on TV",
         imeAction = ImeAction.Search,
+        titleDot = VideoRed,
         sendEnabled = query.text.isNotBlank(),
         onSend = { onSearch(query.text) },
         onDismiss = onDismiss
@@ -981,7 +1244,7 @@ private fun YouTubeSearchSheet(tvName: String, onSearch: (String) -> Unit, onDis
 }
 
 /** Whether the TV's text box holds what the sheet shows. */
-private enum class TvTextStatus { ON_TV, NOT_ON_TV }
+internal enum class TvTextStatus { ON_TV, NOT_ON_TV }
 
 /**
  * The bottom sheet for anything typed on the phone and sent to the TV: a text field, a round send
@@ -1002,6 +1265,7 @@ private fun TvInputSheet(
     onSend: () -> Unit,
     onDismiss: () -> Unit,
     sendEnabled: Boolean = true,
+    titleDot: Color? = null,
     extra: @Composable ColumnScope.(close: () -> Unit) -> Unit = {}
 ) {
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
@@ -1023,6 +1287,7 @@ private fun TvInputSheet(
             },
             sendEnabled = sendEnabled,
             focusRequester = rememberFocusOnOpen(),
+            titleDot = titleDot,
             extra = { extra(close) }
         )
     }
@@ -1041,6 +1306,7 @@ private fun TvInputSheetContent(
     onSend: () -> Unit,
     sendEnabled: Boolean,
     focusRequester: FocusRequester,
+    titleDot: Color? = null,
     extra: @Composable ColumnScope.() -> Unit
 ) {
     Column(
@@ -1053,6 +1319,8 @@ private fun TvInputSheetContent(
             // The label comes from the TV and can be long ("Search movies, shows, apps and more"), so it is
             // the part that gives way: the TV's name says where the text is going. The name is measured
             // first and the label gets what is left
+            // The same red as the play mark on the key that opened the sheet, so the two read as one
+            if (titleDot != null) Box(Modifier.size(8.dp).background(titleDot, CircleShape))
             Row(Modifier.weight(1f)) {
                 Text(
                     title, style = captionText, color = captionColor,
@@ -1098,7 +1366,7 @@ private fun TvInputSheetContent(
 }
 
 @Composable
-private fun StatusPill(status: TvTextStatus) {
+internal fun StatusPill(status: TvTextStatus) {
     val onTv = status == TvTextStatus.ON_TV
     val color = if (onTv) Online else AmberText
     Row(
@@ -1463,15 +1731,52 @@ private fun RemotePreview(
     uiState: RemoteUiState = previewState,
     padMode: PadMode = PadMode.DPAD,
     showHoldTip: Boolean = false,
-    airOffer: AirOffer = AirOffer(inSwitch = uiState.airMouse.linked)
+    airOffer: AirOffer = AirOffer(inSwitch = uiState.airMouse.linked),
+    askMode: AskMode? = AskMode.VOICE,
+    youTubeTip: Boolean = false
 ) {
     AirMouseTVRemoteTheme {
         RemoteContent(
             uiState, "Living Room TV", padMode, {}, AirPadActions(), airOffer, {}, {}, {}, {},
-            showHoldTip, {}, { _, _ -> }, {}, {}, {}, {}
+            showHoldTip, {}, { _, _ -> }, {}, {}, {},
+            youTubeKey = uiState.foregroundApp?.startsWith("com.google.android.youtube.tv") == true && uiState.imeField == null,
+            showYouTubeTip = youTubeTip,
+            askMode = askMode
         )
     }
 }
+
+@Preview(showBackground = true, widthDp = 390, heightDp = 844, name = "Voice: listening while held")
+@Composable
+private fun RemoteVoiceListeningPreview() = RemotePreview(
+    previewState.copy(voice = VoiceState.Listening(List(21) { (it % 7) * 0.06f }))
+)
+
+@Preview(showBackground = true, widthDp = 390, heightDp = 844, name = "Voice: slid off, release to cancel")
+@Composable
+private fun RemoteVoiceCancelPreview() = RemotePreview(
+    previewState.copy(voice = VoiceState.Listening(List(21) { (it % 5) * 0.06f }, cancelArmed = true))
+)
+
+@Preview(showBackground = true, widthDp = 390, heightDp = 844, name = "Voice: tap to start, tap to stop (TalkBack)")
+@Composable
+private fun RemoteVoiceTapPreview() = RemotePreview(
+    previewState.copy(voice = VoiceState.Listening(List(21) { (it % 6) * 0.06f }, tapMode = true))
+)
+
+@Preview(showBackground = true, widthDp = 390, heightDp = 844, name = "Voice: sent")
+@Composable
+private fun RemoteVoiceSentPreview() = RemotePreview(previewState.copy(voice = VoiceState.Sent))
+
+@Preview(showBackground = true, widthDp = 390, heightDp = 844, name = "Voice: TV without voice, Ask key dims (Aa)")
+@Composable
+private fun RemoteNoVoicePreview() = RemotePreview(askMode = AskMode.TYPE)
+
+@Preview(showBackground = true, widthDp = 390, heightDp = 844, name = "YouTube: search key, first time (tip)")
+@Composable
+private fun RemoteYouTubeTipPreview() = RemotePreview(
+    previewState.copy(foregroundApp = "com.google.android.youtube.tv"), youTubeTip = true
+)
 
 private val airMousePreviewState = previewState.copy(
     airMouse = AirMouseUiState(available = true, linked = true, link = PointerLinkState.READY, hasGyroscope = true)

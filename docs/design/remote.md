@@ -479,21 +479,41 @@ mouse has its own document ([air-mouse.md](air-mouse.md)).
 
 ### 16.1 Voice search
 
-Hold a mic button on the phone and speak, and the TV runs a voice search, like the mic button on
-the TV's own remote.
+Hold the Ask key on the phone and speak, and the TV's Google Assistant runs the search, like the
+mic button on the TV's own remote. Built on branch `voice-search` (designs: canvas page 3.0) and
+working on the Hisense (Google TV, assistant `com.google.android.katniss`) on 26 Nov 2026.
 
-- **Protocol:** `remotemessage.proto` already reserves `RemoteVoiceBegin`, `RemoteVoicePayload` and
-  `RemoteVoiceEnd` (fields 30–32 of `RemoteMessage`), but their fields aren't defined yet. They
-  have to be filled in, and the voice feature added to the bitmask the app asks for.
-- **App:** needs the `RECORD_AUDIO` runtime permission (the app's first runtime permission). Audio
-  is streamed to the TV only while the button is held.
-- **Open questions:**
-  - Which audio format and chunk size the TV expects.
-  - Which TVs offer the voice feature. The diagnostics already log the features each TV offers,
-    so this can be gathered from users.
-  - A fallback for TVs without it, such as phone speech-to-text typed into the search field
-    through the text session.
-  - How the permission and the "listening" state are shown to the user.
+**Protocol** (fields 30–32 of `RemoteMessage`, as worked out by androidtvremote2):
+
+1. The app asks for the voice feature (8) along with the others; a TV that offers it then answers
+   the search key with a voice session instead of only opening its search.
+2. The phone presses `KEYCODE_SEARCH`. The TV opens its assistant and sends `RemoteVoiceBegin`
+   with a session id; the phone sends `RemoteVoiceBegin` back with the same id.
+3. The phone streams `RemoteVoicePayload` messages. Each session logs on the TV as
+   `AtvRemote.VoiceFeature: Voice config ... 8000 16 2 0`.
+4. When its assistant hears the end of speech, the TV sends an empty `RemoteVoicePayload` back.
+   The phone ends with `RemoteVoiceEnd` about 3 s after that.
+
+**What it took on the Hisense** (each found by trying it, the logs in `adb logcat` on the TV):
+
+- **8 kHz, 16-bit, mono PCM.** 16 kHz reaches the assistant but comes back empty.
+- **Payloads of exactly 20 KB** (1.28 s). 8 KB payloads reach the assistant, which recognises
+  nothing in them (`recognized_speech: ""`). A Sharp and a Sony did the same (androidtvremote2
+  issues #49 and #51).
+- **The session must outlive the speech.** Ended at once, the search is cancelled; so after the key
+  is let go the microphone turns off and the phone sends silence at the pace of sound until the TV's
+  end-of-speech payload, plus 3 s (capped at 10 s for a TV that never sends it).
+
+**App:** the `RECORD_AUDIO` permission, asked for behind a sheet that says where the voice goes.
+Recording starts when the key has been held 250 ms and is buffered until the TV's session is open,
+so the first word isn't lost. Slide off the key to cancel (the TV's session is ended and its
+assistant closed with Back). With TalkBack the key starts on a tap and turns into Stop.
+`VoiceSearchController` runs a search and is tested through fakes of the TV and the microphone.
+
+**TVs without voice:** the Ask key dims with an "Aa" mark and opens the phone's speech to text,
+which presses the TV's search key and types what is heard into its search box (into YouTube search
+while YouTube is open). Phones without a speech recognizer (the POCO F1's AOSP ROM has none) show
+no Ask key on such TVs. Not yet tried on a TV without voice.
 
 ### 16.2 Favourite apps
 

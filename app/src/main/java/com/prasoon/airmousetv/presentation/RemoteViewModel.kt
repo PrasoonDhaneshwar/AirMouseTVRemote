@@ -28,6 +28,7 @@ import com.prasoon.airmousetv.data.model.RemoteMode
 import com.prasoon.airmousetv.data.model.RemoteUiState
 import com.prasoon.airmousetv.data.model.TvKey
 import com.prasoon.airmousetv.airmouse.repository.AirMouseSession
+import com.prasoon.airmousetv.data.repository.AudioRecordMic
 import com.prasoon.airmousetv.data.repository.HostProbe
 import com.prasoon.airmousetv.data.repository.LastTvStore
 import com.prasoon.airmousetv.data.repository.RemoteRepository
@@ -125,7 +126,8 @@ class RemoteViewModel @Inject constructor(
     private val remoteSession: RemoteSessionManager,
     private val lastTvStore: LastTvStore,
     private val wakeSupportStore: WakeSupportStore,
-    private val airMouse: AirMouseSession
+    private val airMouse: AirMouseSession,
+    mic: AudioRecordMic
 ) : ViewModel() {
 
     private val _uiState = MutableStateFlow(RemoteUiState())
@@ -147,6 +149,9 @@ class RemoteViewModel @Inject constructor(
         tv = SessionTvTextPort(repository, remoteSession),
         onError = { message -> _uiState.value = _uiState.value.copy(error = message) }
     )
+
+    /** The voice search behind the Ask key. */
+    private val voice = VoiceSearchController(viewModelScope, SessionTvVoicePort(repository, remoteSession), mic)
 
     /** Retry loop for a dropped session; non-null/active means we are reconnecting. */
     private var reconnectJob: Job? = null
@@ -173,7 +178,17 @@ class RemoteViewModel @Inject constructor(
         observeConnectionState()
         observeImeField()
         observeAirMouse()
+        observeVoice()
         lastTvStore.load()?.let { connectToLastTv(it) }
+    }
+
+    private fun observeVoice() {
+        viewModelScope.launch {
+            remoteSession.voiceOffered.collect { offered -> _uiState.value = _uiState.value.copy(voiceOffered = offered) }
+        }
+        viewModelScope.launch {
+            voice.state.collect { state -> _uiState.value = _uiState.value.copy(voice = state) }
+        }
     }
 
     private fun observeImeField() {
@@ -285,6 +300,8 @@ class RemoteViewModel @Inject constructor(
         )
         airSetupBegun = false
         airMouse.stop()
+        voice.cancel()
+        voice.dismiss()
     }
 
     /** Hides the message currently shown; the list or remote underneath is unchanged. */
@@ -493,6 +510,7 @@ class RemoteViewModel @Inject constructor(
                         else -> _uiState.value = _uiState.value.copy(error = state.message)
                     }
                     ConnectionState.Disconnected -> {
+                        voice.connectionLost()
                         (_uiState.value.mode as? RemoteMode.Connected)?.let { startReconnect(it.tv) }
                     }
                     else -> Unit
@@ -807,6 +825,23 @@ class RemoteViewModel @Inject constructor(
         }
     }
 
+    // ===== Voice search =====
+
+    /** Turns the microphone on and starts streaming to the TV's assistant; [tapMode] runs until [finishVoice]. */
+    fun startVoice(tapMode: Boolean) = voice.start(tapMode)
+
+    /** The finger slid off the Ask key (true) or back onto it (false). */
+    fun setVoiceCancelArmed(armed: Boolean) = voice.setCancelArmed(armed)
+
+    /** Sends what was said to the TV. */
+    fun finishVoice() = voice.finish()
+
+    /** Drops the voice search; nothing reaches the TV's assistant. */
+    fun cancelVoice() = voice.cancel()
+
+    /** Closes the "Sent" card or a voice error. */
+    fun dismissVoice() = voice.dismiss()
+
     // ===== Air mouse =====
 
     private fun observeAirMouse() {
@@ -888,6 +923,8 @@ class RemoteViewModel @Inject constructor(
      */
     fun setAirMouseForeground(foreground: Boolean) {
         inForeground = foreground
+        // Android silences the microphone of an app in the background, so a search would send nothing
+        if (!foreground) voice.cancel()
         graceJob?.cancel()
         inGrace = !foreground
         if (!foreground) {

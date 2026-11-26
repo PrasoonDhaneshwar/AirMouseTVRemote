@@ -49,4 +49,8 @@ data class RemoteUiState(
     val powerOffIsFinal: Boolean = false,
     /** The pointer for the connected TV; all defaults while no TV is connected. */
     val airMouse: AirMouseUiState = AirMouseUiState(),
+    /** True when the connected TV takes voice from the Ask key; false until it has said so. */
+    val voiceOffered: Boolean = false,
+    /** The voice search behind the Ask key. */
+    val voice: VoiceState = VoiceState.Idle,
 )

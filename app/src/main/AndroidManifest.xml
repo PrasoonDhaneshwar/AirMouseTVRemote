@@ -9,6 +9,19 @@
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
     <uses-permission android:name="android.permission.CHANGE_WIFI_MULTICAST_STATE" />
 
+    <!-- Voice search: the microphone streams to the TV's assistant only while the Ask key is held -->
+    <uses-permission android:name="android.permission.RECORD_AUDIO" />
+    <!-- A phone without one still runs the app; it just can't do voice search -->
+    <uses-feature android:name="android.hardware.microphone" android:required="false" />
+
+    <queries>
+        <!-- Lets the app see the phone's speech recognizer (Android 11+ hides other apps by default),
+             for the typed voice search on TVs without voice -->
+        <intent>
+            <action android:name="android.speech.RecognitionService" />
+        </intent>
+    </queries>
+
 
     <application
         android:name=".AirMouseApplication"

@@ -18,6 +18,10 @@ import com.prasoon.airmousetv.proto.remote.RemoteKeyInject
 import com.prasoon.airmousetv.proto.remote.RemoteDirection
 import com.prasoon.airmousetv.proto.remote.RemotePingResponse
 import com.prasoon.airmousetv.proto.remote.RemoteSetActive
+import com.prasoon.airmousetv.proto.remote.RemoteVoiceBegin
+import com.prasoon.airmousetv.proto.remote.RemoteVoiceEnd
+import com.prasoon.airmousetv.proto.remote.RemoteVoicePayload
+import com.google.protobuf.ByteString
 import com.prasoon.airmousetv.data.model.KeyAction
 import com.prasoon.airmousetv.data.model.TvKey
 import com.prasoon.airmousetv.data.api.TvKeyMapper
@@ -175,6 +179,29 @@ object RemoteMessageEncoder {
     fun encodeAppLink(link: String): ByteArray =
         RemoteMessage.newBuilder()
             .setRemoteAppLinkLaunchRequest(RemoteAppLinkLaunchRequest.newBuilder().setAppLink(link))
+            .build()
+            .toByteArray()
+
+    /** Accepts the voice session the TV opened after a search key: [sessionId] echoes the TV's. */
+    fun encodeVoiceBegin(sessionId: Int): ByteArray =
+        RemoteMessage.newBuilder()
+            .setRemoteVoiceBegin(RemoteVoiceBegin.newBuilder().setSessionId(sessionId))
+            .build()
+            .toByteArray()
+
+    /** One chunk of the voice for session [sessionId]: 16-bit PCM, 8 kHz, mono (see [com.prasoon.airmousetv.data.api.VoiceChunker]). */
+    fun encodeVoicePayload(sessionId: Int, samples: ByteArray): ByteArray =
+        RemoteMessage.newBuilder()
+            .setRemoteVoicePayload(
+                RemoteVoicePayload.newBuilder().setSessionId(sessionId).setSamples(ByteString.copyFrom(samples))
+            )
+            .build()
+            .toByteArray()
+
+    /** Ends voice session [sessionId]: the TV's assistant acts on what it heard. */
+    fun encodeVoiceEnd(sessionId: Int): ByteArray =
+        RemoteMessage.newBuilder()
+            .setRemoteVoiceEnd(RemoteVoiceEnd.newBuilder().setSessionId(sessionId))
             .build()
             .toByteArray()
 
