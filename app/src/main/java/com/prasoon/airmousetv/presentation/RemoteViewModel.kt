@@ -35,8 +35,15 @@ import com.prasoon.airmousetv.data.repository.RemoteRepository
 import com.prasoon.airmousetv.data.repository.RemoteSessionManager
 import com.prasoon.airmousetv.data.repository.TvUnreachableException
 import com.prasoon.airmousetv.data.repository.WakeSupportStore
+import com.prasoon.airmousetv.data.repository.RecentAppsStore
+import com.prasoon.airmousetv.data.api.TvApp
+import com.prasoon.airmousetv.data.api.TvApps
+import com.prasoon.airmousetv.data.model.AppLaunch
+import java.util.Locale
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CoroutineStart
+import kotlinx.coroutines.selects.select
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
@@ -46,12 +53,14 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.drop
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.coroutines.launch
 import kotlin.time.Duration.Companion.milliseconds
 import kotlin.time.Duration.Companion.seconds
+import kotlin.time.TimeSource
 import javax.inject.Inject
 
 private const val TAG = "RemoteViewModel"
@@ -64,6 +73,27 @@ private const val TAG = "RemoteViewModel"
 private const val AIR_LINK_GRACE_MS = 60_000L
 /** How long a scan shows as "scanning" before it settles into found / nothing found. */
 private const val SCAN_WINDOW_MS = 8000L
+
+/**
+ * How long the TV gets to show an app opened from the Apps sheet before the phone says it didn't
+ * open. Long enough for a cold start of a heavy app, whose first screen is what the TV reports.
+ */
+private val APP_OPEN_TIMEOUT = 8.seconds
+
+/** Shortest time the "Opening …" card shows, so a fast TV doesn't make it flash. */
+private val APP_OPENING_MIN_SHOWN = 1200.milliseconds
+
+/** How long the card stays when the app didn't open: long enough to read two lines. */
+private val APP_FAILED_SHOWN = 4.seconds
+
+/** How long an app already in front gets to be reported again before it counts as opened anyway. */
+private val APP_IN_FRONT_SETTLE = 1500.milliseconds
+
+/** How long after the TV turns a link down its dropped connection gets to show; it closes at once. */
+private val RECONNECT_NOTICE = 2.seconds
+
+/** How long to wait for the session to come back before sending the store link: a reconnect took about 2 s. */
+private val APP_RECONNECT_WAIT = 10.seconds
 
 /**
  * How often the network is swept again while no TV is listed. An idle Google TV can stop answering
@@ -126,6 +156,7 @@ class RemoteViewModel @Inject constructor(
     private val remoteSession: RemoteSessionManager,
     private val lastTvStore: LastTvStore,
     private val wakeSupportStore: WakeSupportStore,
+    private val recentAppsStore: RecentAppsStore,
     private val airMouse: AirMouseSession,
     mic: AudioRecordMic
 ) : ViewModel() {
@@ -195,6 +226,7 @@ class RemoteViewModel @Inject constructor(
         viewModelScope.launch {
             repository.foregroundApp.collect { app ->
                 _uiState.value = _uiState.value.copy(foregroundApp = app)
+                if (app != null) rememberApp(app)
             }
         }
         viewModelScope.launch {
@@ -296,8 +328,12 @@ class RemoteViewModel @Inject constructor(
             paired = false,
             pairedOffer = false,
             error = error,
-            airMouse = AirMouseUiState()
+            airMouse = AirMouseUiState(),
+            recentApps = emptyList(),
+            popularApps = emptyList(),
+            appLaunch = null
         )
+        appLaunchJob?.cancel()
         airSetupBegun = false
         airMouse.stop()
         voice.cancel()
@@ -560,6 +596,9 @@ class RemoteViewModel @Inject constructor(
                 settings = airMouse.settings
             )
         )
+        refreshApps(tv)
+        // The app on screen was reported before the remote opened, when there was no TV to file it under
+        _uiState.value.foregroundApp?.let { rememberApp(it) }
         // Finding out asks the user nothing; on a phone where it is known already this returns at once
         airMouse.findOutMouseRole { has -> updateAirMouse { it.copy(roleMissing = !has) } }
         // The session may have dropped while the tick was showing, when no remote was there to notice
@@ -804,6 +843,167 @@ class RemoteViewModel @Inject constructor(
                 _uiState.value = _uiState.value.copy(error = "Send failed: ${e.message}")
             }
         }
+    }
+
+    // ===== Apps =====
+
+    /** Watches for the app opened from the sheet; replaced by the next tap. */
+    private var appLaunchJob: Job? = null
+
+    private val connectedTv get() = (_uiState.value.mode as? RemoteMode.Connected)?.tv
+
+    /** Files [pkg], just reported on screen, at the front of the connected TV's Recent apps. */
+    private fun rememberApp(pkg: String) {
+        val tv = connectedTv ?: return
+        val recent = recentAppsStore.recent(tv.name)
+        val updated = TvApps.addRecent(recent, pkg)
+        if (updated == recent) return
+        recentAppsStore.setRecent(tv.name, updated)
+        refreshApps(tv)
+    }
+
+    /** Loads [tv]'s Recent apps and the Popular ones for the phone's region into the state. */
+    private fun refreshApps(tv: DiscoveredTv) {
+        val recent = recentAppsStore.recent(tv.name)
+        val app = { pkg: String -> TvApp(pkg, recentAppsStore.customName(pkg) ?: TvApps.nameFor(pkg)) }
+        _uiState.value = _uiState.value.copy(
+            recentApps = recent.map(app),
+            popularApps = TvApps.popular(Locale.getDefault().country, exclude = recent).map(app)
+        )
+    }
+
+    /** What came of sending a link to open an app; see [sendAndWatch]. */
+    private enum class LinkOutcome { OPENED, STORE, STUB, REJECTED, TIMEOUT, NOT_SENT }
+
+    /**
+     * Opens [app] on the TV and shows a card until the TV reports it on screen.
+     *
+     * The app's own link goes first (see [TvApps.launchLink]). If no app on the TV claims it, the TV
+     * either shows its browser stub (or nothing) or answers with an error and drops the connection; then an app
+     * that isn't in Recent is probably not installed, so its Play Store page is opened instead. An
+     * app with no link of its own is asked of the TV's Play Store, unless this TV has turned that
+     * down before. Whatever doesn't open gets a card saying so, with the way out: open it on the TV.
+     */
+    fun openApp(app: TvApp) {
+        appLaunchJob?.cancel()
+        val tv = connectedTv ?: return
+        appLaunchJob = viewModelScope.launch {
+            val start = TimeSource.Monotonic.markNow()
+            val pkg = app.pkg
+            val storeOnly = TvApps.needsStoreLaunch(pkg)
+            if (storeOnly && recentAppsStore.storeLaunchRefused(tv.name)) {
+                // Asking again would only drop the connection again
+                showAppFailed(app, AppLaunch.Stage.DID_NOT_OPEN)
+                return@launch
+            }
+            setAppLaunch(AppLaunch(app, AppLaunch.Stage.OPENING))
+            val inRecent = _uiState.value.recentApps.any { it.pkg == pkg }
+            val stage = when (val outcome = sendAndWatch(TvApps.launchLink(pkg), pkg)) {
+                LinkOutcome.NOT_SENT -> return@launch
+                LinkOutcome.OPENED -> null
+                LinkOutcome.STORE -> AppLaunch.Stage.NOT_INSTALLED
+                // The Hisense shows its browser stub for a web address no app claims, but never
+                // reports it, so a link nobody took looks like silence
+                LinkOutcome.TIMEOUT, LinkOutcome.STUB, LinkOutcome.REJECTED -> when {
+                    storeOnly -> {
+                        if (outcome == LinkOutcome.REJECTED) recentAppsStore.setStoreLaunchRefused(tv.name)
+                        AppLaunch.Stage.DID_NOT_OPEN
+                    }
+                    // Seen on this TV, so installed: the link is what failed
+                    inRecent -> AppLaunch.Stage.DID_NOT_OPEN
+                    else -> {
+                        if (outcome == LinkOutcome.REJECTED) awaitReconnected()
+                        val store = sendAndWatch(TvApps.storePageLink(pkg), pkg)
+                        if (store == LinkOutcome.STORE) AppLaunch.Stage.NOT_INSTALLED else AppLaunch.Stage.DID_NOT_OPEN
+                    }
+                }
+            }
+            if (stage == null) {
+                delay(APP_OPENING_MIN_SHOWN - start.elapsedNow())
+                setAppLaunch(null)
+            } else {
+                showAppFailed(app, stage)
+            }
+        }
+    }
+
+    private suspend fun showAppFailed(app: TvApp, stage: AppLaunch.Stage) {
+        setAppLaunch(AppLaunch(app, stage))
+        delay(APP_FAILED_SHOWN)
+        setAppLaunch(null)
+    }
+
+    /**
+     * Sends [link] and waits for what the TV does with it: shows [pkg], the Play Store or the
+     * browser stub, or turns the link down. An app already in front may not be reported again, so
+     * for that one a short quiet spell counts as opened.
+     */
+    private suspend fun sendAndWatch(link: String, pkg: String): LinkOutcome = coroutineScope {
+        val alreadyInFront = _uiState.value.foregroundApp == pkg
+        // Listening starts before the link goes, so a fast answer isn't missed
+        val rejected = async(start = CoroutineStart.UNDISPATCHED) { repository.rejectedLinks.first { it == link } }
+        val shown = async(start = CoroutineStart.UNDISPATCHED) {
+            // Only changes after the tap count: the Play Store may have been in front already
+            repository.foregroundApp.drop(1).first { it == pkg || it == TvApps.PLAY_STORE || it == TvApps.STUB }
+        }
+        val sent = try {
+            repository.openLink(link).also {
+                if (!it) _uiState.value = _uiState.value.copy(error = "This TV can't open apps")
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "openLink failed", e)
+            _uiState.value = _uiState.value.copy(error = "Send failed: ${e.message}")
+            false
+        }
+        val outcome = if (!sent) {
+            setAppLaunch(null)
+            LinkOutcome.NOT_SENT
+        } else {
+            withTimeoutOrNull(if (alreadyInFront) APP_IN_FRONT_SETTLE else APP_OPEN_TIMEOUT) {
+                select {
+                    rejected.onAwait { LinkOutcome.REJECTED }
+                    shown.onAwait {
+                        when (it) {
+                            pkg -> LinkOutcome.OPENED
+                            TvApps.PLAY_STORE -> LinkOutcome.STORE
+                            else -> LinkOutcome.STUB
+                        }
+                    }
+                }
+            } ?: if (alreadyInFront) LinkOutcome.OPENED else LinkOutcome.TIMEOUT
+        }
+        rejected.cancel()
+        shown.cancel()
+        outcome
+    }
+
+    /** Waits for the connection the TV dropped after turning a link down to come back. */
+    private suspend fun awaitReconnected() {
+        withTimeoutOrNull(RECONNECT_NOTICE) { remoteSession.connectionState.first { it != ConnectionState.Connected } }
+        withTimeoutOrNull(APP_RECONNECT_WAIT) { remoteSession.connectionState.first { it == ConnectionState.Connected } }
+    }
+
+    /** Closes the card about an app being opened. */
+    fun dismissAppLaunch() {
+        appLaunchJob?.cancel()
+        setAppLaunch(null)
+    }
+
+    private fun setAppLaunch(launch: AppLaunch?) {
+        _uiState.value = _uiState.value.copy(appLaunch = launch)
+    }
+
+    /** Takes [pkg] out of the connected TV's Recent apps; it comes back when the TV shows it again. */
+    fun removeRecentApp(pkg: String) {
+        val tv = connectedTv ?: return
+        recentAppsStore.setRecent(tv.name, recentAppsStore.recent(tv.name) - pkg)
+        refreshApps(tv)
+    }
+
+    /** Shows [pkg] as [name] on every TV; a blank name goes back to the app's own. */
+    fun renameApp(pkg: String, name: String) {
+        recentAppsStore.setCustomName(pkg, name)
+        connectedTv?.let { refreshApps(it) }
     }
 
     /** Presses Enter on the TV once all text typed so far has been sent. */

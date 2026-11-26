@@ -2,6 +2,7 @@ package com.prasoon.airmousetv.data.repository
 
 import android.os.SystemClock
 import android.util.Log
+import com.prasoon.airmousetv.data.api.TvApps
 import com.prasoon.airmousetv.data.api.planKeyPressEdit
 import com.prasoon.airmousetv.data.api.planTextEdit
 import com.prasoon.airmousetv.data.api.proto.RemoteMessageEncoder
@@ -230,6 +231,12 @@ class RemoteRepository @Inject constructor(
 
     /** Package of the app in front on the TV; null until it has reported one. */
     val foregroundApp get() = session.foregroundApp
+
+    /** Opens [link] on the TV (see [TvApps]). Returns false if the TV can't open links. */
+    suspend fun openLink(link: String): Boolean = session.launchLink(link)
+
+    /** Links the TV turned down; see [RemoteSessionManager.rejectedLinks]. */
+    val rejectedLinks get() = session.rejectedLinks
 
     /** Recent handshake and text-input events, for sharing in a bug report. */
     fun diagnosticsReport() = session.diagnosticsReport()

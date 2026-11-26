@@ -146,6 +146,8 @@ import androidx.core.content.edit
 import com.prasoon.airmousetv.airmouse.model.AirMouseSetupStep
 import com.prasoon.airmousetv.airmouse.model.AirMouseUiState
 import com.prasoon.airmousetv.data.api.SCROLL_STEP_DP
+import com.prasoon.airmousetv.data.api.TvApp
+import com.prasoon.airmousetv.data.model.AppLaunch
 import com.prasoon.airmousetv.data.model.DiscoveredTv
 import com.prasoon.airmousetv.data.model.KeyAction
 import com.prasoon.airmousetv.airmouse.model.PointerLinkState
@@ -197,7 +199,7 @@ internal data class AirOffer(
 
 /**
  * The working remote: D-pad or touchpad in the middle of the thumb's reach, then the key row
- * (Keyboard, Back and Home, Ask), then media and volume. A short press taps a key; holding it sends a long press.
+ * (Keyboard, Back · Home · Apps, Ask), then media and volume. A short press taps a key; holding it sends a long press.
  * While a dropped session is being re-established the keys are disabled and the header says so.
  */
 @Composable
@@ -218,6 +220,7 @@ fun RemoteScreen(viewModel: RemoteViewModel) {
     var showTextEntry by remember { mutableStateOf(false) }
     var showYouTubeSearch by remember { mutableStateOf(false) }
     var showSpeechSearch by remember { mutableStateOf(false) }
+    var showApps by remember { mutableStateOf(false) }
     val clipboard = LocalClipboardManager.current
     val tvName = rememberLastNonNull((uiState.mode as? RemoteMode.Connected)?.tv?.displayName).orEmpty().ifBlank { "TV" }
     // The TV asks for its keyboard by bumping showRequests; open text entry on each new request. Not
@@ -396,9 +399,21 @@ fun RemoteScreen(viewModel: RemoteViewModel) {
         showYouTubeTip = showYouTubeTip,
         onDismissYouTubeTip = dismissYouTubeTip,
         askMode = askMode,
-        voiceActions = voiceActions
+        voiceActions = voiceActions,
+        appsOpen = showApps,
+        onApps = { showApps = true },
+        onDismissAppLaunch = viewModel::dismissAppLaunch
     )
 
+    if (showApps) {
+        val appsActions = remember(viewModel) {
+            AppsActions(onOpen = viewModel::openApp, onRemove = viewModel::removeRecentApp, onRename = viewModel::renameApp)
+        }
+        AppsSheet(
+            recent = uiState.recentApps, popular = uiState.popularApps, onTv = uiState.foregroundApp,
+            tvName = tvName, actions = appsActions, onDismiss = { showApps = false }
+        )
+    }
     if (showAirSettings && airMouse.linked) {
         val settingsActions = remember(viewModel) {
             AirSettingsActions(
@@ -653,8 +668,8 @@ private fun KeyPill(modifier: Modifier = Modifier, keys: @Composable RowScope.()
 private val COMPACT_KEYS_BELOW = 360.dp
 
 /**
- * The row under the pad: Keyboard, then Back and Home in one pill with Home lit (the key the thumb
- * goes back to), then Ask. Nothing in it appears or disappears with the TV's state, so it never reflows:
+ * The row under the pad: Keyboard, then Back, Home and Apps in one pill with Home lit (the key the
+ * thumb goes back to), then Ask. Nothing in it appears or disappears with the TV's state, so it never reflows:
  * the Keyboard key changes its face for YouTube, and the Ask key dims on a TV without voice. On a
  * phone with nothing to offer for voice, an empty space keeps the pill in the middle.
  */
@@ -669,7 +684,9 @@ private fun KeyRow(
     showYouTubeTip: Boolean,
     onDismissYouTubeTip: () -> Unit,
     askMode: AskMode?,
-    voiceActions: VoiceActions
+    voiceActions: VoiceActions,
+    appsOpen: Boolean,
+    onApps: () -> Unit
 ) {
     val round = if (compact) 50.dp else 58.dp
     val pillKey = Modifier.size(if (compact) 52.dp else 64.dp, 50.dp)
@@ -694,6 +711,8 @@ private fun KeyRow(
                 RemoteKey(TvKey.HOME, onKey, enabled, pillKey, pillShape, SurfaceHigh) {
                     KeyIcon(Icons.Default.Home, "Home")
                 }
+                Box(Modifier.width(4.dp))
+                AppsKey(pillKey, pillShape, enabled, lit = appsOpen, onClick = onApps)
             }
             if (askMode != null) {
                 AskKey(
@@ -722,6 +741,31 @@ private fun KeyRow(
                 }
             )
         }
+    }
+}
+
+/**
+ * The Apps key at the end of the pill: opens the Apps sheet, and is lit (teal on the raised surface)
+ * while the sheet is open. Not a TV key, so a tap only, no hold.
+ */
+@Composable
+private fun AppsKey(modifier: Modifier, shape: Shape, enabled: Boolean, lit: Boolean, onClick: () -> Unit) {
+    val interaction = remember { MutableInteractionSource() }
+    val pressed by interaction.collectIsPressedAsState()
+    KeySurface(
+        enabled = enabled,
+        pressed = pressed,
+        held = false,
+        shape = shape,
+        container = if (lit) SurfaceHigh else Color.Transparent,
+        border = null,
+        modifier = modifier.clickable(interaction, indication = null, enabled = enabled, onClick = onClick)
+    ) {
+        Icon(
+            AppsDotsIcon, contentDescription = "Apps on the TV",
+            tint = if (lit) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface,
+            modifier = Modifier.size(22.dp)
+        )
     }
 }
 
@@ -974,7 +1018,10 @@ private fun RemoteContent(
     showYouTubeTip: Boolean = false,
     onDismissYouTubeTip: () -> Unit = {},
     askMode: AskMode? = AskMode.VOICE,
-    voiceActions: VoiceActions = VoiceActions()
+    voiceActions: VoiceActions = VoiceActions(),
+    appsOpen: Boolean = false,
+    onApps: () -> Unit = {},
+    onDismissAppLaunch: () -> Unit = {}
 ) {
     val reconnecting = uiState.isReconnecting
     val enabled = !reconnecting
@@ -1058,6 +1105,7 @@ private fun RemoteContent(
                     onDismiss = voiceActions.onDismiss,
                     modifier = Modifier.fillMaxSize()
                 )
+                AppLaunchCard(uiState.appLaunch, tvName, onDismissAppLaunch, Modifier.align(Alignment.TopCenter).padding(top = 8.dp))
             }
 
             KeyRow(
@@ -1070,7 +1118,9 @@ private fun RemoteContent(
                 showYouTubeTip = showYouTubeTip && enabled,
                 onDismissYouTubeTip = onDismissYouTubeTip,
                 askMode = askMode,
-                voiceActions = voiceActions
+                voiceActions = voiceActions,
+                appsOpen = appsOpen,
+                onApps = onApps
             )
 
             Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
@@ -1824,6 +1874,12 @@ private fun RemoteReconnectingPreview() = RemotePreview(previewState.copy(isReco
 @Preview(showBackground = true, widthDp = 390, heightDp = 844, name = "Remote in YouTube")
 @Composable
 private fun RemoteInYouTubePreview() = RemotePreview(previewState.copy(foregroundApp = "com.google.android.youtube.tv"))
+
+@Preview(showBackground = true, widthDp = 390, heightDp = 844, name = "Apps: opening an app")
+@Composable
+private fun RemoteAppOpeningPreview() = RemotePreview(
+    previewState.copy(appLaunch = AppLaunch(TvApp("com.netflix.ninja", "Netflix"), AppLaunch.Stage.OPENING))
+)
 
 @Composable
 private fun SheetPreview(content: @Composable () -> Unit) {
