@@ -1,6 +1,7 @@
 package com.prasoon.airmousetv.data.model
 
 import com.prasoon.airmousetv.airmouse.model.AirMouseUiState
+import com.prasoon.airmousetv.data.api.TvApp
 
 /** Which top-level screen is showing. */
 sealed interface RemoteMode {
@@ -53,4 +54,10 @@ data class RemoteUiState(
     val voiceOffered: Boolean = false,
     /** The voice search behind the Ask key. */
     val voice: VoiceState = VoiceState.Idle,
+    /** Apps the connected TV has shown, newest first; see [com.prasoon.airmousetv.data.api.TvApps]. */
+    val recentApps: List<TvApp> = emptyList(),
+    /** Common apps to start with, leaving out those already in [recentApps]. */
+    val popularApps: List<TvApp> = emptyList(),
+    /** The app being opened from the Apps sheet, or null when no card shows. */
+    val appLaunch: AppLaunch? = null,
 )

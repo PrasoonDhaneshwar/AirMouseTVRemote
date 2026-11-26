@@ -24,7 +24,9 @@ import kotlinx.coroutines.async
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.update
@@ -166,6 +168,14 @@ class RemoteSessionManager @Inject constructor(
     private val _foregroundApp = MutableStateFlow<String?>(null)
     /** Package of the app in front on the TV, as last reported by it; null until it has reported one. */
     val foregroundApp: StateFlow<String?> = _foregroundApp
+
+    /** Backing flow for [rejectedLinks]. */
+    private val _rejectedLinks = MutableSharedFlow<String>(extraBufferCapacity = 4)
+    /**
+     * Links the TV answered with a RemoteError: no app on it claims them. The TV closes the
+     * connection right after, and the usual reconnect follows.
+     */
+    val rejectedLinks: SharedFlow<String> = _rejectedLinks
 
     /** Backing flow for [voiceOffered]. */
     private val _voiceOffered = MutableStateFlow(false)
@@ -739,6 +749,8 @@ class RemoteSessionManager @Inject constructor(
             message.hasRemoteError() -> {
                 Log.w(TAG, "RemoteError from TV: ${message.remoteError}")
                 note("TV reported an error: ${message.remoteError.toString().trim().replace('\n', ' ')}")
+                val failed = message.remoteError.message
+                if (failed.hasRemoteAppLinkLaunchRequest()) _rejectedLinks.tryEmit(failed.remoteAppLinkLaunchRequest.appLink)
             }
             message.hasRemoteSetVolumeLevel() -> message.remoteSetVolumeLevel.let {
                 // Reported by the TV when its volume changes; none arriving after a volume key means the key had no effect

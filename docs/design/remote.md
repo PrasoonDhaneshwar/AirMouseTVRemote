@@ -515,40 +515,41 @@ which presses the TV's search key and types what is heard into its search box (i
 while YouTube is open). Phones without a speech recognizer (the POCO F1's AOSP ROM has none) show
 no Ask key on such TVs. Not yet tried on a TV without voice.
 
-### 16.2 Favourite apps
+### 16.2 Apps
 
-Open apps such as Netflix, YouTube or Prime Video directly from the remote, without going through
-the TV's home screen.
+The Apps key (nine dots, at the end of the Back · Home pill) opens a sheet of the TV's apps; a tap
+opens one on the TV. Built on branch `apps`; the logic is in `data/api/TvApps.kt`.
 
-- **Protocol:** uses the app-link feature already in use for YouTube search
-  (`RemoteAppLinkLaunchRequest`).
-- **Constraints we already know:**
-  - The TV doesn't report which apps are installed. It only reports the app currently on screen
-    (its package name, such as `com.netflix.ninja`), each time that app changes. So favourites
-    come from a built-in list of common apps, or from apps the user has had on screen and chose to
-    pin.
-  - `intent://` links make the TV close the connection (section 10). Launch links must be plain
-    URLs or app schemes, worked out per app and tested on real TVs.
-- **Why not the manifest:** `<queries>` in the manifest only grants visibility of apps installed
-  on the *phone* (through the phone's `PackageManager`). The TV is a separate device, and the
-  protocol has no way to ask it what's installed.
-- **Proposed approach:**
-  1. **Built-in catalogue.** The app ships a small list of common TV apps (a Kotlin or JSON file,
-     not the manifest). Each entry has a display name, an icon, the TV package name (for example
-     `com.netflix.ninja`) and the launch link.
-  2. **Confirm by launching.** When a favourite is tapped, the app sends its link and watches the
-     app the TV reports on screen. If the expected package appears within a few seconds, the app
-     is installed on that TV, and that is remembered. If not, the phone shows "Not on this TV" and
-     dims the favourite for that TV.
-  3. **Learn from use.** When the TV reports an app on screen that isn't in the catalogue, the
-     user can pin it as a favourite. This covers apps the catalogue doesn't know.
-  4. **Per TV.** What's installed and what's pinned are stored per TV, since each TV has
-     different apps.
-- **Must be tested on real TVs before building:** what the TV does with a link for an app it
-  doesn't have. It may open the Play Store, show a chooser, or answer with a `RemoteError`, which
-  for `intent://` links also closes the connection. That decides whether step 2 is safe as it is,
-  or needs a reconnect path.
-- **Open questions:**
-  - Where favourites appear in the UI (this depends on the design overhaul).
-  - How long to wait for the TV to report the app before treating it as not installed.
-  - How to keep the catalogue's links current as apps change them.
+- **What the app can know.** The TV reports only the app on screen (its package, such as
+  `com.netflix.ninja`), each time it changes. It has no message that lists installed apps and
+  sends no names or icons. `<queries>` in the manifest only covers apps on the *phone*. Remote
+  apps that show the full list use ADB, which needs developer options on the TV.
+- **Recent.** Every package the TV reports is filed at the front of that TV's list (per TV name,
+  newest first, at most 12, in `RecentAppsStore`). Launchers, Settings, the Play Store, the
+  assistant and the screensaver are left out (`TvApps.isSystem`). Apps installed outside the
+  Play Store (Stremio, SmartTube, CloudStream) arrive the same way.
+- **Names.** Known packages have a built-in name; others get one made from the package
+  (`com.stremio.one` gives "Stremio"). Long-press a recent app to rename it (kept per package,
+  on every TV) or remove it (it comes back when the TV shows it again). Tiles show the first
+  letter, no logos.
+- **Popular.** Netflix, YouTube, Prime Video, Disney+ and Spotify, then up to three regional apps
+  picked by the phone's country setting (US, IN, GB, BR so far). Apps already in Recent are left out.
+- **Opening.** The TV opens an app link with whichever app claims it (`startActivity` with
+  `VIEW`), so each app needs a link of its own that no other app claims: `stremio://`,
+  `https://www.netflix.com/title`, `https://www.youtube.com` (not `vnd.youtube://`, which SmartTube
+  also claims). `TvApps` lists them; those marked "checked" were confirmed on the Hisense with
+  `cmd package query-activities`. A card over the pad says "Opening …" until the TV reports the app
+  (at most 8 s).
+- **When no app claims the link** (tested on the Hisense, 2026-11-27):
+  - A custom scheme (`spotify://`) gets a `RemoteError` and the TV closes the connection; the
+    usual reconnect takes about 2 s.
+  - A web address (`https://www.disneyplus.com`) goes to the TV's browser stub, which closes at
+    once and is never reported, so it looks like silence.
+  - For an app not in Recent (probably not installed), either way leads to
+    `market://details?id=<package>`, its Play Store page, and the card says it isn't on this TV.
+    For an app in Recent the card says it didn't open and to open it on the TV.
+- **Apps with no link of its own** (SmartTube, unknown packages) are asked of the Play Store with
+  `market://launch?id=<package>`. The Hisense's Play Store doesn't take that: `RemoteError` and a
+  dropped connection, for sideloaded and store apps alike. After the first refusal the TV is
+  remembered (`RecentAppsStore.storeLaunchRefused`) and such apps show "didn't open" without
+  sending anything. Other TVs' Play Stores may take it.
