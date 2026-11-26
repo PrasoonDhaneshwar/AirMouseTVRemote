@@ -20,5 +20,7 @@ enum class TvKey {
     PLAY_PAUSE,
     PREVIOUS,
     NEXT,
-    ENTER
+    ENTER,
+    /** Opens the TV's search; on a TV with voice active it opens a voice session instead (see the voice search). */
+    SEARCH
 }

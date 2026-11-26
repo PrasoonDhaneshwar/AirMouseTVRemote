@@ -32,11 +32,24 @@ message RemoteStart {
   bool started = 1;
 }
 
-message RemoteVoiceEnd {}
+// Voice search, as worked out by the community (androidtvremote2). The phone sends KEYCODE_SEARCH,
+// the TV answers with a RemoteVoiceBegin carrying a session id, the phone sends it back, then streams
+// RemoteVoicePayload chunks and ends with RemoteVoiceEnd, all for that session id.
+message RemoteVoiceEnd {
+  int32 session_id = 1;
+}
 
-message RemoteVoicePayload {}
+message RemoteVoicePayload {
+  int32 session_id = 1;
+  // 16-bit little-endian PCM, 8 kHz, mono.
+  bytes samples = 2;
+}
 
-message RemoteVoiceBegin {}
+message RemoteVoiceBegin {
+  int32 session_id = 1;
+  // Sent by the TV (the app that will take the voice); not needed in the phone's reply.
+  string package_name = 2;
+}
 
 message RemoteTextFieldStatus {
   int32 counter_field = 1;

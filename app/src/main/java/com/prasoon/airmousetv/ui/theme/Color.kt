@@ -41,3 +41,14 @@ val Amber = Color(0xFFE37E4A)
 val OnAmber = Color(0xFF2B1204)
 /** [Amber] lightened for small text on an amber-tinted card. */
 val AmberText = Color(0xFFF0A27A)
+
+/** The microphone is live: the Ask key while it listens, the way recorders show it. Kept for that alone, so red always means the mic is on. */
+val LiveRed = Color(0xFFE5484D)
+/** [LiveRed] lightened for the LISTENING label and the sound-level bars, so small text stays readable on the panel. */
+val LiveRedText = Color(0xFFFF7B7B)
+/** The play mark in the YouTube search glass on the Keyboard key: a general video-search sign, not YouTube's logo. */
+val VideoRed = Color(0xFFFF0033)
+/** Quiet notes on the voice panel and sheets: dimmer than [TextSecondary], brighter than [Faint]. */
+val Muted = Color(0xFF9AA3AD)
+/** The one-time tip bubble: light on the dark remote, so it reads as a passing note, not a control. */
+val TipSurface = Color(0xFFE6E9ED)

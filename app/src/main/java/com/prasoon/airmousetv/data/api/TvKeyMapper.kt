@@ -21,5 +21,6 @@ object TvKeyMapper {
         TvKey.PREVIOUS -> RemoteKeyCode.KEYCODE_MEDIA_PREVIOUS
         TvKey.NEXT -> RemoteKeyCode.KEYCODE_MEDIA_NEXT
         TvKey.ENTER -> RemoteKeyCode.KEYCODE_ENTER
+        TvKey.SEARCH -> RemoteKeyCode.KEYCODE_SEARCH
     }
 }
