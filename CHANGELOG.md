@@ -4,12 +4,29 @@ All notable changes to Air Mouse TV Remote. Versions match the git tags and GitH
 
 ## [Unreleased]
 
+## [3.0] - 2026-11-27
+
+### Added
+- Voice search: hold the new Ask key and speak, and the TV's Google Assistant shows the results,
+  like the mic on the TV's own remote. Your voice goes only to the TV. Slide off the key to cancel;
+  with TalkBack, tap to start and tap again to stop. The microphone permission is asked for behind
+  a sheet that says where the voice goes.
+- On TVs that don't offer voice to remotes, the Ask key uses the phone's speech to text and types
+  what you say into the TV's search box (into YouTube search while YouTube is open).
+- Apps: the new Apps key opens the apps you've used on the TV, newest first, plus popular ones such
+  as Netflix, YouTube and Prime Video. Tap one to open it on the TV. Long press a recent app to
+  rename or remove it. Apps the TV doesn't have open their Play Store page.
+
+### Changed
+- A new key row under the D-pad: Keyboard, a Back · Home · Apps pill, and Ask.
+- While YouTube is on screen, the Keyboard key turns into YouTube search, with a one-time tip.
+
 ## [2.0] - 2026-11-22
 
 ### Added
 - Air mouse: point the phone at the TV and a pointer follows. The phone acts as a Bluetooth mouse,
-  so nothing is installed on the TV. Tap the pad to click, hold a finger on it to freeze the
-  pointer while re-aiming, and scroll with two fingers or the strip at the edge, at the touchpad's
+  so nothing is installed on the TV. Tap the pad to click (the pointer holds still while a finger
+  is on the pad), and scroll with two fingers or the strip at the edge, at the touchpad's
   pace and one direction at a time. Pointing pauses when the phone is put down. While pointing,
   Vol + clicks and Vol − is Back.
 - The TV's pointer stays hidden until you open the air mouse pad, so it doesn't appear while you
@@ -131,7 +148,8 @@ All notable changes to Air Mouse TV Remote. Versions match the git tags and GitH
 - Reconnect, and a connection state that shows whether the TV is really reachable.
 - The "Deep Code" dark theme.
 
-[Unreleased]: https://github.com/PrasoonDhaneshwar/AirMouseTVRemote/compare/2.0...HEAD
+[Unreleased]: https://github.com/PrasoonDhaneshwar/AirMouseTVRemote/compare/3.0...HEAD
+[3.0]: https://github.com/PrasoonDhaneshwar/AirMouseTVRemote/compare/2.0...3.0
 [2.0]: https://github.com/PrasoonDhaneshwar/AirMouseTVRemote/compare/1.4...2.0
 [1.4]: https://github.com/PrasoonDhaneshwar/AirMouseTVRemote/compare/1.3...1.4
 [1.3]: https://github.com/PrasoonDhaneshwar/AirMouseTVRemote/compare/1.2...1.3
