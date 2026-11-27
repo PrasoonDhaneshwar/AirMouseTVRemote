@@ -1,6 +1,6 @@
 <div align="center">
 
-<img src="docs/store/feature-graphic.png" alt="Air Mouse TV Remote: your phone becomes a TV remote and an air mouse" width="100%" />
+<img src="docs/store/feature-graphic.png" alt="Air Mouse TV Remote: point, click and scroll on your TV, with voice search, apps, typing and a remote" width="100%" />
 
 **Turn your phone into a remote and air mouse for any Android TV / Google TV: no pairing hardware, no cloud, just your Wi-Fi.**
 
@@ -10,7 +10,7 @@
 ![Hilt](https://img.shields.io/badge/DI-Hilt-2C8EBB)
 [![CI](https://github.com/PrasoonDhaneshwar/AirMouseTVRemote/actions/workflows/ci.yml/badge.svg)](https://github.com/PrasoonDhaneshwar/AirMouseTVRemote/actions/workflows/ci.yml)
 
-[**⬇️ Download the APK**](https://github.com/PrasoonDhaneshwar/AirMouseTVRemote/releases/download/2.0/AirMouseTVRemote-v2.0.apk)
+[**⬇️ Download the APK**](https://github.com/PrasoonDhaneshwar/AirMouseTVRemote/releases/download/3.0/AirMouseTVRemote-v3.0.apk)
 
 </div>
 
@@ -20,18 +20,20 @@
 
 - **Finds your TV automatically.** mDNS discovery, a scan of the local network for networks that block it, and an HTTP name lookup for TVs that don't advertise one. You can also add a TV by its IP address, and the last TV is remembered so the app reconnects on launch.
 - **Pairs like the official app.** Type the 6-character code shown on the TV once (digits and capital letters on one keyboard) and it connects by itself as soon as the last character is in. The app remembers the TV's certificate and refuses a different device answering at the same address.
-- **Full remote on one screen.** A big D-pad or a touchpad, OK, Back, Home, volume, mute, power and media controls, with no scrolling. Keys answer your thumb with a tick, hold one for a long press, and the phone's own volume buttons change the TV's volume.
+- **Full remote on one screen.** A big D-pad or a touchpad, OK, Back, Home, Apps, volume, mute, power and media controls, with no scrolling. Keys answer your thumb with a tick, hold one for a long press, and the phone's own volume buttons change the TV's volume.
+- **Voice search.** Hold the mic key and speak, and the TV's Google Assistant shows the results, like the mic on the TV's own remote. Your voice goes only to the TV. On TVs without voice for remotes, the phone's speech to text types into the TV's search box instead.
+- **Your TV's apps.** The Apps key lists the apps you've used on the TV, newest first, plus popular ones like Netflix, YouTube and Prime Video, and opens them with a tap.
 - **Air mouse.** Point the phone at the TV to move a real pointer, tap to click and swipe to scroll. It travels over Bluetooth, Recenter brings the pointer back to the middle, and the volume buttons can click and go Back.
 - **Type on the TV.** When a TV search box asks for text, a sheet opens above the phone keyboard and types straight into it. It follows what the TV really holds and shows whether your text has reached the TV.
-- **YouTube search.** YouTube's own keyboard can't be typed into from a phone, so a button opens the results for your search on the TV.
+- **YouTube search.** YouTube's own keyboard can't be typed into from a phone, so while YouTube is on screen the keyboard key turns into YouTube search and opens the results on the TV.
 - **Honest connection state.** The UI reflects whether the TV is really reachable, and reconnects when the network comes back.
-- **Accessible and small.** The keys work with TalkBack, and the release APK is about 1.7 MB.
+- **Accessible and small.** The keys work with TalkBack, and the release APK is about 1.8 MB.
 
 ## 📱 Screenshots
 
-| Air mouse | Remote | Touchpad | Typing | Finding TVs |
-|:---:|:---:|:---:|:---:|:---:|
-| <img src="docs/store/screenshot-01-air-mouse.png" width="150" alt="Air mouse pad" /> | <img src="docs/store/screenshot-02-remote.png" width="150" alt="D-pad remote" /> | <img src="docs/store/screenshot-03-touchpad.png" width="150" alt="Touchpad" /> | <img src="docs/store/screenshot-04-typing.png" width="150" alt="Typing into a TV search box" /> | <img src="docs/store/screenshot-05-discovery.png" width="150" alt="TV list" /> |
+| Voice search | Air mouse | Remote | Apps | Typing | Finding TVs |
+|:---:|:---:|:---:|:---:|:---:|:---:|
+| <img src="docs/store/screenshot-01-voice-search.png" width="130" alt="Holding the mic key to ask the TV" /> | <img src="docs/store/screenshot-02-air-mouse.png" width="130" alt="Air mouse pad" /> | <img src="docs/store/screenshot-03-remote.png" width="130" alt="D-pad remote" /> | <img src="docs/store/screenshot-04-apps.png" width="130" alt="The TV's recent and popular apps" /> | <img src="docs/store/screenshot-05-typing.png" width="130" alt="Typing into a TV search box" /> | <img src="docs/store/screenshot-06-discovery.png" width="130" alt="TV list" /> |
 
 ## 🎬 See it in action
 
@@ -39,14 +41,18 @@
 
 <img src="docs/gifs/air-mouse.gif" width="780" alt="Moving the phone moves a pointer across the TV home screen" />
 
-| Find & pair | Navigate | Type on the TV | Switch TV |
-|:---:|:---:|:---:|:---:|
-| <img src="docs/gifs/pairing.gif" width="190" /> | <img src="docs/gifs/remote.gif" width="190" /> | <img src="docs/gifs/text-entry.gif" width="190" /> | <img src="docs/gifs/reconnect.gif" width="190" /> |
+**Voice search:** hold the mic key, say what you want to watch, and the TV's assistant shows the results.
+
+<img src="docs/gifs/voice-search.gif" width="780" alt="Holding the mic key on the phone while the TV's Google Assistant searches for comedy movies" />
+
+| Find & pair | Navigate | Open apps | Type on the TV | Switch TV |
+|:---:|:---:|:---:|:---:|:---:|
+| <img src="docs/gifs/pairing.gif" width="160" alt="Finding the TV and typing the pairing code" /> | <img src="docs/gifs/remote.gif" width="160" alt="D-pad, long press and touchpad" /> | <img src="docs/gifs/apps.gif" width="160" alt="Opening YouTube and Netflix from the Apps sheet" /> | <img src="docs/gifs/text-entry.gif" width="160" alt="Typing a search that reaches the TV" /> | <img src="docs/gifs/reconnect.gif" width="160" alt="Switching back to a paired TV without a code" /> |
 
 ## 👇 Get started
 
 1. Put your phone and TV on the **same Wi-Fi network**.
-2. [Download the APK](https://github.com/PrasoonDhaneshwar/AirMouseTVRemote/releases/download/2.0/AirMouseTVRemote-v2.0.apk) and install it.
+2. [Download the APK](https://github.com/PrasoonDhaneshwar/AirMouseTVRemote/releases/download/3.0/AirMouseTVRemote-v3.0.apk) and install it.
 3. Open the app and pick your TV from the list.
 4. Type the code shown on the TV screen. It connects as soon as all six characters are in.
 5. Start navigating.
