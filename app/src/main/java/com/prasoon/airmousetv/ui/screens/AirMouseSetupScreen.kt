@@ -133,7 +133,7 @@ internal fun AirMouseSetupScreen(
     airMouse: AirMouseUiState,
     tvName: String,
     onKey: (TvKey, KeyAction) -> Unit,
-    onCopyDiagnostics: () -> Unit
+    onDiagnostics: () -> Unit
 ) {
     val step = airMouse.setup ?: return
     BackHandler(onBack = viewModel::backInAirMouseSetup)
@@ -175,7 +175,7 @@ internal fun AirMouseSetupScreen(
         onBack = viewModel::backInAirMouseSetup,
         onClose = viewModel::closeAirMouseSetup,
         onDone = viewModel::finishAirMouseSetup,
-        onCopyDiagnostics = onCopyDiagnostics
+        onDiagnostics = onDiagnostics
     )
 }
 
@@ -196,7 +196,7 @@ private fun AirMouseSetupContent(
     onBack: () -> Unit,
     onClose: () -> Unit,
     onDone: () -> Unit,
-    onCopyDiagnostics: () -> Unit
+    onDiagnostics: () -> Unit
 ) {
     Column(
         modifier = Modifier
@@ -213,22 +213,22 @@ private fun AirMouseSetupContent(
                 when {
                     // Whatever step the user is on: a pairing the phone has started is what to say something about.
                     // (In a measured run the screen kept saying "pick the phone in the TV's list" through it)
-                    pairingWith != null -> Pairing(pairingWith, onKey, onBack, onCopyDiagnostics)
-                    step == AirMouseSetupStep.WAITING -> Waiting(phoneName, onKey, onTvSearching, onBack, onCopyDiagnostics)
-                    search.possible -> FindTv(tvName, search.candidates, search.over, onKey, onPair, onRetrySearch, onTvSearching, onBack, onCopyDiagnostics)
+                    pairingWith != null -> Pairing(pairingWith, onKey, onBack, onDiagnostics)
+                    step == AirMouseSetupStep.WAITING -> Waiting(phoneName, onKey, onTvSearching, onBack, onDiagnostics)
+                    search.possible -> FindTv(tvName, search.candidates, search.over, onKey, onPair, onRetrySearch, onTvSearching, onBack, onDiagnostics)
                     // The phone can't look for the TV (before Android 12), so the TV looks for the phone
-                    else -> OnTv(onKey, onTvSearching, onBack, onCopyDiagnostics)
+                    else -> OnTv(onKey, onTvSearching, onBack, onDiagnostics)
                 }
             }
             AirMouseSetupStep.DONE -> Done(tvName, onDone)
-            AirMouseSetupStep.UNSUPPORTED -> Unsupported(blocked = link == PointerLinkState.BLOCKED, onClose, onCopyDiagnostics)
+            AirMouseSetupStep.UNSUPPORTED -> Unsupported(blocked = link == PointerLinkState.BLOCKED, onClose, onDiagnostics)
         }
     }
 }
 
 /** The top row of a setup screen: a way out on the left, and the progress bars once the steps have begun. */
 @Composable
-private fun TopRow(icon: ImageVector, description: String, onClick: () -> Unit, stepsDone: Int?, onCopyDiagnostics: (() -> Unit)? = null) {
+private fun TopRow(icon: ImageVector, description: String, onClick: () -> Unit, stepsDone: Int?, onDiagnostics: (() -> Unit)? = null) {
     Box(Modifier.fillMaxWidth().height(48.dp)) {
         // Pulled left so the icon, not its touch area, lines up with the text below
         IconButton(onClick = onClick, modifier = Modifier.offset(x = (-12).dp).size(48.dp)) {
@@ -236,9 +236,9 @@ private fun TopRow(icon: ImageVector, description: String, onClick: () -> Unit, 
         }
         if (stepsDone != null) StepBars(stepsDone, Modifier.align(Alignment.Center))
         // For a setup that gets stuck: the user can share what the Bluetooth link did without leaving it
-        if (onCopyDiagnostics != null) {
-            TextButton(onClick = onCopyDiagnostics, modifier = Modifier.align(Alignment.CenterEnd).offset(x = 12.dp)) {
-                Text("Copy log", style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        if (onDiagnostics != null) {
+            TextButton(onClick = onDiagnostics, modifier = Modifier.align(Alignment.CenterEnd).offset(x = 12.dp)) {
+                Text("Send log", style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
         }
     }
@@ -411,9 +411,9 @@ private fun ColumnScope.FindTv(
     onRetry: () -> Unit,
     onLetTvFindPhone: () -> Unit,
     onBack: () -> Unit,
-    onCopyDiagnostics: () -> Unit
+    onDiagnostics: () -> Unit
 ) {
-    TopRow(Icons.AutoMirrored.Filled.ArrowBack, "Back", onBack, stepsDone = 1, onCopyDiagnostics = onCopyDiagnostics)
+    TopRow(Icons.AutoMirrored.Filled.ArrowBack, "Back", onBack, stepsDone = 1, onDiagnostics = onDiagnostics)
     Body {
         Spacer(Modifier.height(28.dp))
         StepCaption("STEP 1 · FIND THE TV")
@@ -468,8 +468,8 @@ private fun ColumnScope.FindTv(
  * decides so, only a notification.
  */
 @Composable
-private fun ColumnScope.Pairing(deviceName: String, onKey: (TvKey, KeyAction) -> Unit, onBack: () -> Unit, onCopyDiagnostics: () -> Unit) {
-    TopRow(Icons.AutoMirrored.Filled.ArrowBack, "Back", onBack, stepsDone = 2, onCopyDiagnostics = onCopyDiagnostics)
+private fun ColumnScope.Pairing(deviceName: String, onKey: (TvKey, KeyAction) -> Unit, onBack: () -> Unit, onDiagnostics: () -> Unit) {
+    TopRow(Icons.AutoMirrored.Filled.ArrowBack, "Back", onBack, stepsDone = 2, onDiagnostics = onDiagnostics)
     Body {
         Spacer(Modifier.height(28.dp))
         StepCaption("STEP 2 · ACCEPT ON BOTH")
@@ -494,8 +494,8 @@ private fun ColumnScope.Pairing(deviceName: String, onKey: (TvKey, KeyAction) ->
 }
 
 @Composable
-private fun ColumnScope.OnTv(onKey: (TvKey, KeyAction) -> Unit, onTvSearching: () -> Unit, onBack: () -> Unit, onCopyDiagnostics: () -> Unit) {
-    TopRow(Icons.AutoMirrored.Filled.ArrowBack, "Back", onBack, stepsDone = 1, onCopyDiagnostics = onCopyDiagnostics)
+private fun ColumnScope.OnTv(onKey: (TvKey, KeyAction) -> Unit, onTvSearching: () -> Unit, onBack: () -> Unit, onDiagnostics: () -> Unit) {
+    TopRow(Icons.AutoMirrored.Filled.ArrowBack, "Back", onBack, stepsDone = 1, onDiagnostics = onDiagnostics)
     Body {
         Spacer(Modifier.height(28.dp))
         StepCaption("STEP 1 · ON THE TV")
@@ -509,10 +509,10 @@ private fun ColumnScope.OnTv(onKey: (TvKey, KeyAction) -> Unit, onTvSearching: (
 }
 
 @Composable
-private fun ColumnScope.Waiting(phoneName: String?, onKey: (TvKey, KeyAction) -> Unit, onMakeVisibleAgain: () -> Unit, onBack: () -> Unit, onCopyDiagnostics: () -> Unit) {
+private fun ColumnScope.Waiting(phoneName: String?, onKey: (TvKey, KeyAction) -> Unit, onMakeVisibleAgain: () -> Unit, onBack: () -> Unit, onDiagnostics: () -> Unit) {
     // The TV lists the phone under its Bluetooth name, which the user may never have seen
     val name = phoneName?.takeIf { it.isNotBlank() }
-    TopRow(Icons.AutoMirrored.Filled.ArrowBack, "Back", onBack, stepsDone = 2, onCopyDiagnostics = onCopyDiagnostics)
+    TopRow(Icons.AutoMirrored.Filled.ArrowBack, "Back", onBack, stepsDone = 2, onDiagnostics = onDiagnostics)
     Body {
         Spacer(Modifier.height(28.dp))
         StepCaption("STEP 2 · ON THE TV")
@@ -560,7 +560,7 @@ private fun ColumnScope.Done(tvName: String, onDone: () -> Unit) {
 }
 
 @Composable
-private fun ColumnScope.Unsupported(blocked: Boolean, onClose: () -> Unit, onCopyDiagnostics: () -> Unit) {
+private fun ColumnScope.Unsupported(blocked: Boolean, onClose: () -> Unit, onDiagnostics: () -> Unit) {
     TopRow(Icons.Default.Close, "Close", onClose, stepsDone = null)
     Body {
         Headline(
@@ -577,7 +577,7 @@ private fun ColumnScope.Unsupported(blocked: Boolean, onClose: () -> Unit, onCop
         )
     }
     PrimaryAction("Back to remote", onClose)
-    SecondaryAction("Copy diagnostics", onCopyDiagnostics, Modifier.padding(top = 10.dp))
+    SecondaryAction("Copy diagnostics", onDiagnostics, Modifier.padding(top = 10.dp))
 }
 
 @Composable

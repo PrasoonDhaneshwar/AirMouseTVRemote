@@ -4,6 +4,7 @@ import android.content.Context
 import android.content.pm.ApplicationInfo
 import android.os.SystemClock
 import android.util.Log
+import com.prasoon.airmousetv.data.api.DiagnosticLog
 import com.prasoon.airmousetv.data.api.FrameCodec
 import com.prasoon.airmousetv.data.api.awakeCheckStillValid
 import com.prasoon.airmousetv.data.api.computePairingSecret
@@ -75,7 +76,7 @@ private const val TRUSTED_CHECK_TIMEOUT_MS = 10_000L
 /** No bytes from the TV for this long on the remote connection means it is gone; most TVs ping every ~5 s, but a waipu stick went quiet for over 15 s. */
 private const val REMOTE_READ_TIMEOUT_MS = 40_000
 /** How many recent events [RemoteSessionManager.diagnosticsReport] keeps. */
-private const val MAX_DIAGNOSTIC_LINES = 120
+const val MAX_DIAGNOSTIC_LINES = 120
 /** Silence allowed on a remote connection whose TV hasn't pinged yet, so quiet sticks aren't dropped while idle. */
 private const val UNPINGED_READ_TIMEOUT_MS = 90_000
 /** Shorter timeout for the pre-connect reachability probe, so an off TV is reported quickly. */
@@ -188,21 +189,20 @@ class RemoteSessionManager @Inject constructor(
     /** Waits for the TV's RemoteVoiceBegin after a search key; set only while [beginVoice] is waiting. */
     @Volatile private var voiceBeginWaiter: CompletableDeferred<Int>? = null
 
-    private val diagnostics = ArrayDeque<String>()
+    private val diagnostics = DiagnosticLog(MAX_DIAGNOSTIC_LINES)
 
     /** Remembers [event] (most recent [MAX_DIAGNOSTIC_LINES]) so a user without adb can share what the TV did. */
-    @Synchronized
-    fun note(event: String) {
-        if (diagnostics.size >= MAX_DIAGNOSTIC_LINES) diagnostics.removeFirst()
-        diagnostics.addLast("%tT %s".format(System.currentTimeMillis(), event))
-    }
+    fun note(event: String) = diagnostics.add("%tT".format(System.currentTimeMillis()), event)
+
+    /** The connected TV's vendor, model, address and remote service version, for the top of a diagnostics report; null until it has said. */
+    @Volatile var tvSummary: String? = null
+        private set
 
     /** Notes that [what] failed, with the phone's Wi-Fi band and signal, to tell a weak or switched link from a TV problem. */
     fun noteFailure(what: String) = note("$what; ${networkMonitor.wifiSummary()}")
 
     /** Recent handshake and text-input events, as plain text to paste into a bug report. */
-    @Synchronized
-    fun diagnosticsReport(): String = diagnostics.joinToString("\n")
+    fun diagnosticsReport(): String = diagnostics.report()
 
     /** True once the TV has pinged in this remote session, which tells us it keeps the line busy while idle. */
     @Volatile private var pingSeen = false
@@ -698,6 +698,7 @@ class RemoteSessionManager @Inject constructor(
                 val info = message.remoteConfigure.deviceInfo
                 val textOffered = activeFeatures and 4 != 0
                 Log.d(TAG, "RemoteConfigure from TV: ${info.model} offers $offered, using $activeFeatures")
+                tvSummary = "${info.vendor.cleanDeviceName()} ${info.model.cleanDeviceName()} at $host, remote service ${info.appVersion.cleanDeviceName()}"
                 note("TV ${info.vendor} ${info.model}, remote service ${info.appVersion}; offers $offered, using $activeFeatures, text input ${if (textOffered) "offered" else "NOT offered"}")
                 _voiceOffered.value = activeFeatures and VOICE_FEATURE != 0
                 send(RemoteMessageEncoder.encodeConfigure(activeFeatures), conn)

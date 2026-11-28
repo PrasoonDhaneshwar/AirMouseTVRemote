@@ -224,7 +224,9 @@ class RemoteRepository @Inject constructor(
      * a repeated Power tap, or a TV that has left the network (see [RemoteSessionManager.sendKey]).
      */
     suspend fun sendKey(key: TvKey, action: KeyAction = KeyAction.TAP): Boolean {
-        if (key == TvKey.VOLUME_UP || key == TvKey.VOLUME_DOWN) session.note("sent $key $action")
+        // Every remote key is a button, never a typed character (typing goes through typeEdit), so
+        // logging them all keeps the report's "nothing you typed" promise
+        session.note("sent $key $action")
         val powerTap = key == TvKey.POWER && action == KeyAction.TAP
         return session.sendKey(RemoteMessageEncoder.encodeKeyPress(key, action), powerTap)
     }
@@ -240,6 +242,9 @@ class RemoteRepository @Inject constructor(
 
     /** Recent handshake and text-input events, for sharing in a bug report. */
     fun diagnosticsReport() = session.diagnosticsReport()
+
+    /** The TV line for the top of a diagnostics report; see [RemoteSessionManager.tvSummary]. */
+    val diagnosticsTv get() = session.tvSummary
 
     /**
      * Opens YouTube's search results for [query] on the TV, for TVs where typing into its own
