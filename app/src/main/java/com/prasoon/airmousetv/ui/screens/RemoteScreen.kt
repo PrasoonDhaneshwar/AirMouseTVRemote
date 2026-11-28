@@ -1,6 +1,10 @@
 package com.prasoon.airmousetv.ui.screens
 
+import android.content.ActivityNotFoundException
 import android.content.Context
+import android.content.Intent
+import android.net.Uri
+import android.os.Build
 import android.view.HapticFeedbackConstants
 import android.widget.Toast
 import androidx.activity.compose.BackHandler
@@ -51,7 +55,7 @@ import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Close
-import androidx.compose.material.icons.filled.ContentCopy
+import androidx.compose.material.icons.automirrored.filled.Send
 import androidx.compose.material.icons.filled.ErrorOutline
 import androidx.compose.material.icons.filled.Home
 import androidx.compose.material.icons.filled.Keyboard
@@ -145,9 +149,15 @@ import androidx.compose.ui.unit.sp
 import androidx.core.content.edit
 import com.prasoon.airmousetv.airmouse.model.AirMouseSetupStep
 import com.prasoon.airmousetv.airmouse.model.AirMouseUiState
+import com.prasoon.airmousetv.data.api.DiagnosticsHeader
 import com.prasoon.airmousetv.data.api.SCROLL_STEP_DP
+import com.prasoon.airmousetv.data.api.SUPPORT_EMAIL
 import com.prasoon.airmousetv.data.api.TvApp
+import com.prasoon.airmousetv.data.api.diagnosticsEmailBody
+import com.prasoon.airmousetv.data.api.diagnosticsReport
+import com.prasoon.airmousetv.data.api.diagnosticsSubject
 import com.prasoon.airmousetv.data.model.AppLaunch
+import com.prasoon.airmousetv.data.repository.MAX_DIAGNOSTIC_LINES
 import com.prasoon.airmousetv.data.model.DiscoveredTv
 import com.prasoon.airmousetv.data.model.KeyAction
 import com.prasoon.airmousetv.airmouse.model.PointerLinkState
@@ -292,10 +302,8 @@ fun RemoteScreen(viewModel: RemoteViewModel) {
         padMode = mode
         uiPrefs.edit { putString("pad_mode", mode.name) }
     }
-    val copyDiagnostics = {
-        clipboard.setText(AnnotatedString(viewModel.diagnosticsReport()))
-        Toast.makeText(context, "Diagnostics copied", Toast.LENGTH_SHORT).show()
-    }
+    var showDiagnostics by remember { mutableStateOf(false) }
+    val openDiagnostics = { showDiagnostics = true }
 
     val airMouse = uiState.airMouse
     // The air mouse is advertised (its place in the mode switch, the tip, the dot on the menu) unless the
@@ -339,7 +347,7 @@ fun RemoteScreen(viewModel: RemoteViewModel) {
     }
 
     if (airMouse.setup != null) {
-        AirMouseSetupScreen(viewModel, airMouse, tvName, onKey = viewModel::sendKey, onCopyDiagnostics = copyDiagnostics)
+        AirMouseSetupScreen(viewModel, airMouse, tvName, onKey = viewModel::sendKey, onDiagnostics = openDiagnostics)
         // A setup that ends linked hands over to the pad it was for
         LaunchedEffect(airMouse.setup) {
             if (airMouse.setup == AirMouseSetupStep.DONE) selectPadMode(PadMode.AIR_MOUSE)
@@ -393,7 +401,7 @@ fun RemoteScreen(viewModel: RemoteViewModel) {
                 else -> Toast.makeText(context, "Open a search box on the TV first", Toast.LENGTH_SHORT).show()
             }
         },
-        onCopyDiagnostics = copyDiagnostics,
+        onDiagnostics = openDiagnostics,
         onSwitchTv = viewModel::switchTv,
         youTubeKey = youTubeKey,
         showYouTubeTip = showYouTubeTip,
@@ -438,6 +446,70 @@ fun RemoteScreen(viewModel: RemoteViewModel) {
     }
     if (showSpeechSearch) {
         SpeechSearchSheet(viewModel, tvName, youTube = youTubeKey, onDismiss = { showSpeechSearch = false })
+    }
+    // Last, so it opens over the air mouse setup too, which has its own way here
+    if (showDiagnostics) {
+        val header = remember { diagnosticsHeader(context, viewModel.diagnosticsTv()) }
+        val report = remember { diagnosticsReport(header, viewModel.diagnosticsReport()) }
+        DiagnosticsSheet(
+            report = report,
+            maxEvents = MAX_DIAGNOSTIC_LINES,
+            tvName = tvName,
+            onSend = {
+                showDiagnostics = false
+                sendDiagnostics(context, header.appVersion, report)
+            },
+            onCopy = {
+                showDiagnostics = false
+                clipboard.setText(AnnotatedString(report))
+                Toast.makeText(context, "Diagnostics copied", Toast.LENGTH_SHORT).show()
+            },
+            onDismiss = { showDiagnostics = false }
+        )
+    }
+}
+
+/** This build's version and the phone it runs on, for the top of a diagnostics report. */
+private fun diagnosticsHeader(context: Context, tv: String?): DiagnosticsHeader {
+    val info = context.packageManager.getPackageInfo(context.packageName, 0)
+    @Suppress("DEPRECATION")
+    val build = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) info.longVersionCode else info.versionCode.toLong()
+    return DiagnosticsHeader(
+        appVersion = info.versionName.orEmpty(),
+        appBuild = build,
+        phone = "${Build.MANUFACTURER} ${Build.MODEL}",
+        android = Build.VERSION.RELEASE,
+        tv = tv
+    )
+}
+
+/**
+ * Opens [report] as a prefilled email to support. Plain ACTION_SEND text lists every app that takes text, ranked by the system, and on a real phone
+ * the email apps were missing from the share sheet; a mailto: selector limits it to email apps,
+ * while keeping ACTION_SEND's extras, which email apps read more reliably than a mailto: link's
+ * query. With one email app it opens straight to the draft, with several Android asks which. A
+ * phone without one gets the share sheet instead.
+ */
+private fun sendDiagnostics(context: Context, appVersion: String, report: String) {
+    val lines = report.count { it == '\n' } + 1
+    val title = "Air Mouse TV Remote diagnostics · $lines lines"
+    fun send() = Intent(Intent.ACTION_SEND).apply {
+        type = "text/plain"
+        putExtra(Intent.EXTRA_EMAIL, arrayOf(SUPPORT_EMAIL))
+        putExtra(Intent.EXTRA_SUBJECT, diagnosticsSubject(appVersion))
+        putExtra(Intent.EXTRA_TEXT, diagnosticsEmailBody(report))
+        // The share sheet's preview line on Android 10 and later
+        putExtra(Intent.EXTRA_TITLE, title)
+    }
+    val email = send().apply { selector = Intent(Intent.ACTION_SENDTO, Uri.parse("mailto:")) }
+    try {
+        context.startActivity(email)
+    } catch (_: ActivityNotFoundException) {
+        try {
+            context.startActivity(Intent.createChooser(send(), title))
+        } catch (_: ActivityNotFoundException) {
+            Toast.makeText(context, "No app on this phone can send it. Use Copy instead.", Toast.LENGTH_LONG).show()
+        }
     }
 }
 
@@ -518,7 +590,7 @@ private fun Header(
  */
 @Composable
 private fun OverflowMenu(
-    onCopyDiagnostics: () -> Unit,
+    onDiagnostics: () -> Unit,
     onSwitchTv: () -> Unit,
     onSetUpAirMouse: (() -> Unit)?,
     onAirMouseSettings: (() -> Unit)?,
@@ -573,9 +645,10 @@ private fun OverflowMenu(
                 expanded = false
                 onSwitchTv()
             }
-            MenuItem("Copy diagnostics", Icons.Default.ContentCopy) {
+            HorizontalDivider(color = SurfaceHigh)
+            MenuItem("Send diagnostics", Icons.AutoMirrored.Filled.Send, tint = MaterialTheme.colorScheme.primary) {
                 expanded = false
-                onCopyDiagnostics()
+                onDiagnostics()
             }
         }
     }
@@ -1012,7 +1085,7 @@ private fun RemoteContent(
     onDismissHoldTip: () -> Unit,
     onKey: (TvKey, KeyAction) -> Unit,
     onShowKeyboard: () -> Unit,
-    onCopyDiagnostics: () -> Unit,
+    onDiagnostics: () -> Unit,
     onSwitchTv: () -> Unit,
     youTubeKey: Boolean = false,
     showYouTubeTip: Boolean = false,
@@ -1049,7 +1122,7 @@ private fun RemoteContent(
                 tvName, reconnecting = reconnecting, enabled = enabled, onKey = onKey,
                 menu = {
                     OverflowMenu(
-                        onCopyDiagnostics, onSwitchTv,
+                        onDiagnostics, onSwitchTv,
                         onSetUpAirMouse = onSetUpAirMouse.takeIf { airMouse.available && !airMouse.linked },
                         onAirMouseSettings = onAirMouseSettings.takeIf { airMouse.linked },
                         proChip = airOffer.proChip, dot = airOffer.menuDot, onOpened = onMenuOpened

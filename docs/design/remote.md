@@ -410,10 +410,22 @@ used.
 
 ## 12. Diagnostics
 
-Users without adb can copy **diagnostics** from the remote's ⋮ menu. They contain the last 60
-events: handshake steps, the TV's vendor, model and offered features, text-session events (lengths
-only), volume reports, screen on/off, scan results and connection losses. This is how problems on
-TVs we don't own (such as missing text input) get diagnosed.
+Users without adb can send **diagnostics** from the remote's ⋮ menu (and the air mouse setup's
+"Send log"). They contain the last 120 events: handshake steps, the TV's vendor, model and offered
+features, the remote keys pressed, text-session events (lengths only), volume reports, screen
+on/off, scan results and connection losses. This is how problems on TVs we don't own (such as
+missing text input) get diagnosed.
+
+- **Nothing typed or said is recorded.** Remote keys (`TvKey`) are buttons only; typing without a
+  text session sends key codes through `typeEdit`, which logs a count, never the characters.
+- The same event back to back is one line with a count (`sent DOWN TAP ×6, last at …`), so D-pad
+  scrolling doesn't push the connection events out (`DiagnosticLog`).
+- A sheet shows what will be sent, and the report itself, before anything leaves the phone. Send
+  opens an email app (`ACTION_SEND` with a `mailto:` selector; plain text in the share sheet left
+  email apps out on a real phone, and a phone without one gets the share sheet): an email to the support address with
+  the app version in the subject, "What happened?" first, then the app, phone and TV versions,
+  then the events. Copy instead puts it on the clipboard. The app itself never sends
+  anything.
 
 ## 13. Build, test and release
 
@@ -421,7 +433,8 @@ TVs we don't own (such as missing text input) get diagnosed.
 - **Unit tests:** `./gradlew :app:testDebugUnitTest`. They cover the frame codec, protobuf wire
   format, pairing secret and code rules, key and text mappers, text-edit planning, the text entry
   controller (with a fake TV), power-timing rules, IPv4 parsing and scan ranges, certificate
-  pinning, client certificate persistence, name parsing, address choice, and `DiscoveredTv` /
+  pinning, client certificate persistence, name parsing, address choice, the diagnostics log and
+  report, and `DiscoveredTv` /
   `ImeField` helpers.
 - **Release:** `./gradlew :app:assembleRelease`, with R8 minify and resource shrinking (about
   14 MB → 1.5 MB). Protobuf-lite looks fields up by name, so `proguard-rules.pro` keeps the

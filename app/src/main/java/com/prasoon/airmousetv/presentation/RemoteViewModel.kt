@@ -819,8 +819,11 @@ class RemoteViewModel @Inject constructor(
         remoteSession.close()
     }
 
-    /** Recent handshake and text-input events, for the user to copy into a bug report. */
+    /** Recent handshake, key and text-input events, for the user to send in a bug report. */
     fun diagnosticsReport(): String = repository.diagnosticsReport()
+
+    /** The connected TV's model, address and remote service version, or null before it has said. */
+    fun diagnosticsTv(): String? = repository.diagnosticsTv
 
     /** Starts a text entry session whose field already shows [initial] on the TV. */
     fun beginTextEntry(initial: String) = textEntry.begin(initial)

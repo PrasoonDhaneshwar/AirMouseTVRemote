@@ -17,8 +17,15 @@ All notable changes to Air Mouse TV Remote. Versions match the git tags and GitH
   as Netflix, YouTube and Prime Video. Tap one to open it on the TV. Long press a recent app to
   rename or remove it. Apps the TV doesn't have open their Play Store page.
 
+- Send diagnostics: the ⋮ menu's Copy diagnostics is now Send diagnostics. A sheet shows what the
+  report holds (never anything you typed or said) and the report itself; Send opens your email app
+  with an email to support already filled in, and Copy instead still copies it. The air mouse
+  setup's "Send log" opens the same sheet.
+
 ### Changed
 - A new key row under the D-pad: Keyboard, a Back · Home · Apps pill, and Ask.
+- Diagnostics now list the buttons pressed, with repeats merged into one line, and start with the
+  app, phone and TV versions.
 - While YouTube is on screen, the Keyboard key turns into YouTube search, with a one-time tip.
 
 ## [2.0] - 2026-11-22
